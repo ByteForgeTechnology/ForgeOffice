@@ -1,0 +1,107 @@
+name: forgeoffice
+
+x-app: &app
+  image: forgeoffice/app:${FORGE_VERSION:-latest}
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    DATABASE_URL: postgres://${POSTGRES_USER:-forge}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-forge}
+    REDIS_URL: redis://redis:6379
+    FORGE_DATA_ROOT: /data
+
+services:
+  api:
+    <<: *app
+    command: ["node", "apps/api/dist/main.js"]
+    ports:
+      - "${FORGE_HTTP_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - forge_mail_data:/data/mail
+      - forge_drive_data:/data/drive
+      - forge_team_media:/data/team
+      - forge_certs:/data/certs
+      - forge_backups:/data/backups
+      # Optional, for live container status in the admin console. Also set
+      # FORGE_DOCKER_SOCKET=/var/run/docker.sock. Prefer a read-only socket proxy.
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  worker:
+    <<: *app
+    command: ["node", "apps/worker/dist/main.js"]
+    healthcheck:
+      disable: true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy # the API applies database migrations on boot
+    volumes:
+      - forge_mail_data:/data/mail
+      - forge_drive_data:/data/drive
+      - forge_team_media:/data/team
+      - forge_certs:/data/certs:ro
+      - forge_backups:/data/backups
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-forge}
+    volumes:
+      - forge_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF keeps BullMQ job state across restarts; BullMQ requires noeviction.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - forge_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Optional TLS reverse proxy with automatic Let's Encrypt certificates:
+  #   docker compose --profile tls up -d
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      FORGE_DOMAIN: ${FORGE_DOMAIN:-localhost}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - forge_certs:/data/certs
+    depends_on:
+      - api
+
+volumes:
+  forge_db_data:      # PostgreSQL database files
+  forge_redis_data:   # Redis AOF/RDB persistence & BullMQ job states
+  forge_mail_data:    # Raw MIME messages (.eml), Maildir stores & mail attachments
+  forge_drive_data:   # ForgeDrive files, versioned revisions, thumbnails & previews
+  forge_team_media:   # Chat file drops, voice notes & meeting recordings
+  forge_certs:        # TLS certificates, DKIM keys, OIDC signing keys & master secret
+  forge_backups:      # Automated snapshots (database dump + volume archives)

@@ -1,0 +1,9 @@
+{
+	# Keep Let's Encrypt certificates in the forge_certs volume.
+	storage file_system /data/certs/caddy
+}
+
+{$FORGE_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:8080
+}

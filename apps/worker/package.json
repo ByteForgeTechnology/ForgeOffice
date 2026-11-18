@@ -1,0 +1,27 @@
+{
+  "name": "@forge/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@forge/db": "workspace:*",
+    "@forge/events": "workspace:*",
+    "@forge/storage": "workspace:*",
+    "bullmq": "^6.7.7",
+    "drizzle-orm": "^0.45.4",
+    "ioredis": "^6.0.0",
+    "pino": "^10.4.0"
+  },
+  "devDependencies": {
+    "tsup": "^9.0.0",
+    "tsx": "^4.23.15",
+    "vitest": "^5.1.0"
+  },
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "build": "tsup",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

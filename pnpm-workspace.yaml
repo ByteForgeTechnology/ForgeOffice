@@ -1,0 +1,13 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Native modules / build tools that are allowed to run install scripts.
+allowBuilds:
+  argon2: true
+  esbuild: true
+  msgpackr-extract: true
+
+# Hoist dependencies so bundled app output (tsup) can resolve the third-party
+# dependencies of inlined @forge/* workspace packages at runtime.
+shamefullyHoist: true
