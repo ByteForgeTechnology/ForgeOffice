@@ -75,6 +75,7 @@ export function adminUserRoutes(app: App, ctx: AppContext) {
       const term = q?.trim() ? `%${q.trim().replace(/[\\%_]/g, (c) => '\\' + c)}%` : null;
       const where = and(
         eq(users.orgId, req.principal!.orgId),
+        eq(users.kind, 'person'),
         status && status !== 'all' ? eq(users.status, status) : ne(users.status, 'deleted'),
         term ? or(ilike(users.displayName, term), ilike(users.email, term), ilike(users.department, term), ilike(users.jobTitle, term)) : undefined,
       );
@@ -353,6 +354,7 @@ export function adminUserRoutes(app: App, ctx: AppContext) {
     async (req) => {
       const p = req.principal!;
       const target = await loadTarget(p, req.params.id);
+      if (target.kind === 'shared') throw badRequest('Shared mailboxes cannot hold admin roles');
       await assertCanManage(p, target);
       const wanted = [...new Set(req.body.roles)];
       const found = wanted.length ? await db.select().from(roles).where(and(eq(roles.orgId, p.orgId), inArray(roles.key, wanted))) : [];

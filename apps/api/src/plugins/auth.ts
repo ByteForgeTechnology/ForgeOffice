@@ -48,7 +48,7 @@ export function authenticate(ctx: AppContext): preHandlerAsyncHookHandler {
       throw unauthorized('Invalid or expired access token');
     }
     const data = await loadPrincipalData(ctx, claims.sub);
-    if (!data || data.user.status !== 'active') throw unauthorized('Account is not active');
+    if (!data || data.user.status !== 'active' || data.user.kind === 'shared') throw unauthorized('Account is not active');
     req.principal = {
       user: data.user,
       orgId: data.user.orgId,

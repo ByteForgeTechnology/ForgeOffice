@@ -23,10 +23,11 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Do not attach a token (public endpoints). */
   anonymous?: boolean;
+  headers?: Record<string, string>;
 }
 
 export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = { accept: 'application/json' };
+  const headers: Record<string, string> = { accept: 'application/json', ...opts.headers };
   if (!opts.anonymous) {
     const token = await getAccessToken();
     if (token) headers.authorization = `Bearer ${token}`;

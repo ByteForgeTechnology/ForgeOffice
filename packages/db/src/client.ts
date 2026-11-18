@@ -1,5 +1,8 @@
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
-import * as schema from './schema';
+import * as coreSchema from './schema';
+import * as mailSchema from './schema-mail';
+
+const schema = { ...coreSchema, ...mailSchema };
 
 export { schema };
 

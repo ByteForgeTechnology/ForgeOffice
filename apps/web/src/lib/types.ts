@@ -38,6 +38,8 @@ export interface Org {
   brandColor: string;
   hasLogo: boolean;
   setupCompletedAt: string | null;
+  undoSendSeconds: number;
+  mailMaxMessageBytes: number;
 }
 
 export interface Me {

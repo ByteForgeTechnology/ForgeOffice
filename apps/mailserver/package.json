@@ -1,0 +1,27 @@
+{
+  "name": "@forge/mailserver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "build": "tsup",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forge/db": "workspace:*",
+    "@forge/events": "workspace:*",
+    "@forge/mail": "workspace:*",
+    "@forge/storage": "workspace:*",
+    "pino": "^10.4.0"
+  },
+  "devDependencies": {
+    "imapflow": "^2.12.1",
+    "nodemailer": "^10.6.0",
+    "tsup": "^9.0.0",
+    "tsx": "^4.23.15",
+    "vitest": "^5.1.0"
+  }
+}

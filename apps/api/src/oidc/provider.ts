@@ -66,7 +66,7 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
     clientBasedCORS: (_ctx, origin, client) => client.redirectUris?.some((u) => new URL(u).origin === origin) ?? false,
     async findAccount(_ctx, sub) {
       const [user] = await db.select().from(users).where(eq(users.id, sub)).limit(1);
-      if (!user || user.status !== 'active') return undefined;
+      if (!user || user.status !== 'active' || user.kind === 'shared') return undefined;
       return {
         accountId: user.id,
         async claims() {

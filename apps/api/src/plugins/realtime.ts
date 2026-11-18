@@ -5,6 +5,7 @@ import { hasPermission } from '@forge/auth';
 import type { AppContext } from '../context';
 import { systemOverview } from '../services/system';
 import { loadPrincipalData } from './auth';
+import { accessibleMailboxes, sharedFolderOwners } from '@forge/mail';
 
 interface SocketData {
   userId: string;
@@ -47,6 +48,9 @@ export function attachRealtime(server: HttpServer, ctx: AppContext, log: { warn:
       if (!data || data.user.status !== 'active') return next(new Error('unauthorized'));
       socket.data = { userId: data.user.id, orgId: data.user.orgId };
       void socket.join(`user:${data.user.id}`);
+      // Live updates for delegated mailboxes ride on the owner's room.
+      for (const g of await accessibleMailboxes(ctx.mail, data.user.id)) if (g.access !== 'none') void socket.join(`user:${g.ownerId}`);
+      for (const o of await sharedFolderOwners(ctx.mail, data.user.id)) void socket.join(`user:${o.ownerId}`);
       if (hasPermission(data.permissions, 'system:read')) void socket.join('system');
       if (hasPermission(data.permissions, 'audit:read')) void socket.join(`audit:${data.user.orgId}`);
       // Disconnect when the access token expires; the client reconnects with a fresh one.
@@ -87,6 +91,14 @@ export function attachRealtime(server: HttpServer, ctx: AppContext, log: { warn:
     if (e.orgId) io.to(`audit:${e.orgId}`).emit('audit:created', e);
   };
   ctx.events.on('audit.created', onAudit);
+
+  // Mail changes go to the owner's sockets (webmail live updates).
+  const onMail = (e: { userId: string; mailboxId?: string }) => io.local.to(`user:${e.userId}`).emit('mail:changed', e);
+  if (ctx.bus) void ctx.bus.on('mail.changed', onMail).catch(() => {});
+  else ctx.events.on('mail.changed', onMail);
+  const onCalendar = (e: { userIds: string[] }) => e.userIds.forEach((id) => io.local.to(`user:${id}`).emit('calendar:changed', {}));
+  if (ctx.bus) void ctx.bus.on('calendar.changed', onCalendar).catch(() => {});
+  else ctx.events.on('calendar.changed', onCalendar);
 
   if (ctx.bus) {
     void ctx.bus.on('backup.updated', (e) => io.local.to('system').emit('backup:updated', e)).catch(() => {});

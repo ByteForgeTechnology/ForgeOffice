@@ -6,6 +6,8 @@ import { createTokenVerifier } from '@forge/auth';
 import { connectDatabase } from '@forge/db';
 import { EventBus, QUEUE_NAMES, createQueue, createRedis, startHeartbeat } from '@forge/events';
 import { BlobStore } from '@forge/storage';
+import { createMailContext, ensureDkimKey, startMailProtocols } from '@forge/mail';
+import { domains } from '@forge/db';
 import { buildApp } from './app';
 import type { AppConfig } from './config';
 import type { AppContext, Queues } from './context';
@@ -42,6 +44,24 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
   const org = await getPrimaryOrg(dbHandle.db);
   const setupToken = org?.setupCompletedAt ? null : await resolveSetupToken(config.volumes.certs.path, config.setupToken);
 
+  const mail = await createMailContext({
+    db: dbHandle.db,
+    mailDir: config.volumes.mail.path,
+    bus,
+    events,
+    deliveryQueue: queues?.['mail-delivery'] ?? null,
+    log: logger,
+    config: {
+      hostname: config.mail.hostname,
+      publicUrl: config.publicUrl,
+      certsDir: config.volumes.certs.path,
+      relayUrl: config.mail.relayUrl,
+      disableAuthChecks: config.mail.disableAuthChecks,
+    },
+  });
+  // Every domain gets a DKIM key so outbound mail is signed from day one.
+  for (const d of await dbHandle.db.select().from(domains)) await ensureDkimKey(mail, d).catch((err) => logger.warn({ err, domain: d.name }, 'could not create DKIM key'));
+
   const ctx: AppContext = {
     config,
     dbHandle,
@@ -56,11 +76,13 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
     events,
     audit: new AuditService(dbHandle.db, events, bus, logger),
     verifyAccessToken: createTokenVerifier({ issuer: config.issuer, audience: config.apiAudience, jwks: signing.publicJwks }),
+    mail,
   };
 
   const forge = createProvider(ctx, logger);
   const app = await buildApp(ctx, forge, { logger });
   let realtime: ReturnType<typeof attachRealtime> | null = null;
+  let protocols: Awaited<ReturnType<typeof startMailProtocols>> | null = null;
   let stopHeartbeat = () => {};
 
   return {
@@ -71,9 +93,18 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
       await app.listen({ host: config.host, port: config.port });
       realtime = attachRealtime(app.server, ctx, logger);
       if (redis) stopHeartbeat = startHeartbeat(redis, { service: 'api', version: config.version });
+      if (config.mail.embed) {
+        protocols = await startMailProtocols(mail, {
+          ports: { ...config.mail.ports, host: config.host },
+          allowInsecureAuth: config.mail.allowInsecureAuth,
+          maxMessageBytes: 35 * 1024 * 1024,
+        });
+        logger.info({ ports: protocols.ports }, 'embedded SMTP/IMAP listeners started');
+      }
     },
     async stop() {
       stopHeartbeat();
+      await protocols?.close().catch(() => {});
       await realtime?.close().catch(() => {});
       await app.close().catch(() => {});
       if (queues) await Promise.all(Object.values(queues).map((q) => q.close())).catch(() => {});

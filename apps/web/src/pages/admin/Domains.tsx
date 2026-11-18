@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Globe, Plus, Star, Trash2 } from 'lucide-react';
 import { Alert, Badge, Button, Card, CardBody, EmptyState, Input, PageHeader, PageSpinner, useToast } from '@forge/ui';
 import { ConfirmDialog } from '../../components/admin';
+import { MailDns } from '../../components/MailDns';
 import { api, errorMessage } from '../../lib/api';
 import { useCan } from '../../lib/hooks';
 import type { Domain } from '../../lib/types';
@@ -13,6 +14,7 @@ export function DomainsPage() {
   const canManage = useCan('domains:manage');
   const [name, setName] = useState('');
   const [removing, setRemoving] = useState<Domain | null>(null);
+  const [mailOpen, setMailOpen] = useState<string | null>(null);
   const list = useQuery({ queryKey: ['admin', 'domains'], queryFn: () => api<{ items: Domain[] }>('/api/v1/admin/domains') });
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin', 'domains'] });
 
@@ -105,6 +107,10 @@ export function DomainsPage() {
                     </div>
                   )}
                 </div>
+                <button type="button" className="text-sm font-medium text-brand hover:underline" onClick={() => setMailOpen(mailOpen === d.id ? null : d.id)}>
+                  {mailOpen === d.id ? 'Hide mail setup' : 'Mail setup (MX, SPF, DKIM, DMARC)'}
+                </button>
+                {mailOpen === d.id && <MailDns domainId={d.id} canManage={canManage} />}
                 {!d.verified && (
                   <Alert tone="info" title="Add this TXT record at your DNS provider">
                     <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link, NavLink, Outlet, useNavigate, useSearchParams } from 'react-router';
+import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { LogOut, Search, Settings2, ShieldCheck, UserCircle2, Users } from 'lucide-react';
 import { AppLauncher, Avatar, ThemeSwitcher, cn } from '@forge/ui';
@@ -15,9 +15,12 @@ export function Shell() {
   const { data: branding } = useBranding();
   const { data: me } = useMe();
   const isAdmin = (me?.permissions.length ?? 0) > 0;
+  const { pathname } = useLocation();
+  // Mail and Calendar use the full viewport height with their own panes.
+  const fullBleed = pathname === '/mail' || pathname === '/calendar';
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className={cn('flex flex-col', fullBleed ? 'h-dvh overflow-hidden' : 'min-h-screen')}>
       <header className="sticky top-0 z-30 bg-brand text-white shadow-sm">
         <div className="mx-auto flex h-14 max-w-screen-2xl items-center gap-2 px-3 sm:gap-3 sm:px-4">
           <AppLauncher apps={launcherApps(isAdmin)} onNavigate={(href) => navigate(href)} />
@@ -41,9 +44,15 @@ export function Shell() {
           <UserMenu />
         </div>
       </header>
-      <main className="mx-auto w-full max-w-screen-2xl flex-1 px-4 py-6 sm:px-6">
-        <Outlet />
-      </main>
+      {fullBleed ? (
+        <main className="min-h-0 flex-1">
+          <Outlet />
+        </main>
+      ) : (
+        <main className="mx-auto w-full max-w-screen-2xl flex-1 px-4 py-6 sm:px-6">
+          <Outlet />
+        </main>
+      )}
     </div>
   );
 }

@@ -52,6 +52,31 @@ services:
       - forge_certs:/data/certs:ro
       - forge_backups:/data/backups
 
+  # ForgeMail SMTP (25 inbound, 587/465 submission) and IMAP (143/993).
+  mail:
+    <<: *app
+    command: ["node", "apps/mailserver/dist/main.js"]
+    ports:
+      - "${FORGE_SMTP_HOST_PORT:-25}:25"
+      - "587:587"
+      - "465:465"
+      - "143:143"
+      - "993:993"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    healthcheck:
+      disable: true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - forge_mail_data:/data/mail
+      - forge_certs:/data/certs
+
   db:
     image: postgres:17-alpine
     restart: unless-stopped
@@ -105,3 +130,4 @@ volumes:
   forge_team_media:   # Chat file drops, voice notes & meeting recordings
   forge_certs:        # TLS certificates, DKIM keys, OIDC signing keys & master secret
   forge_backups:      # Automated snapshots (database dump + volume archives)
+  forge_mdm_data:     # Phase 6 (ForgeManage): installers, .mobileconfig payloads & device logs

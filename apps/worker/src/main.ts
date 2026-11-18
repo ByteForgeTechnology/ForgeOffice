@@ -5,6 +5,8 @@ import { EventBus, createQueue, createRedis, createWorker, startHeartbeat } from
 import { loadWorkerConfig } from './config';
 import { createBackupProcessor } from './processors/backup';
 import { createMaintenanceProcessor } from './processors/maintenance';
+import { createMailDeliveryProcessor } from './processors/mail';
+import { createMailContext } from '@forge/mail';
 
 async function main() {
   const config = loadWorkerConfig();
@@ -15,7 +17,7 @@ async function main() {
   if (dbHandle.driver !== 'postgres') log.warn('worker is running against PGlite; database dumps are skipped');
   const redis = createRedis(config.redisUrl);
   redis.on('error', (err) => log.warn({ err: err.message }, 'redis connection error'));
-  const bus = new EventBus(redis);
+  const bus = new EventBus(redis, redis.duplicate());
 
   // Register repeatable jobs (idempotent: upsert by scheduler id).
   const maintenance = createQueue('maintenance', conn);
@@ -36,9 +38,25 @@ async function main() {
   // Populate volume usage straight away rather than waiting 15 minutes.
   await maintenance.add('scan-volumes', {}, { jobId: `scan-volumes-boot-${Date.now()}` });
 
+  const mailCtx = await createMailContext({
+    db: dbHandle.db,
+    mailDir: config.volumes.mail.path,
+    bus,
+    deliveryQueue: createQueue('mail-delivery', conn),
+    log,
+    config: {
+      hostname: config.mailHostname,
+      publicUrl: config.publicUrl,
+      certsDir: config.volumes.certs.path,
+      relayUrl: config.smtpRelay,
+      disableAuthChecks: true,
+    },
+  });
+
   const workers = [
+    createWorker('mail-delivery', createMailDeliveryProcessor(mailCtx), conn, { concurrency: 8 }),
     createWorker('backups', createBackupProcessor(dbHandle.db, config, bus, log), conn, { concurrency: 1, lockDuration: 10 * 60_000 }),
-    createWorker('maintenance', createMaintenanceProcessor(dbHandle.db, redis, config), conn, { concurrency: 2 }),
+    createWorker('maintenance', createMaintenanceProcessor(dbHandle.db, redis, config, mailCtx), conn, { concurrency: 2 }),
   ];
   for (const w of workers) {
     w.on('failed', (job, err) => log.error({ queue: w.name, job: job?.name, id: job?.id, err: err.message }, 'job failed'));

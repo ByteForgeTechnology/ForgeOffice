@@ -16,6 +16,9 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
     auditRetentionDays: Number(env.FORGE_AUDIT_RETENTION_DAYS ?? 365),
     deletedUserRetentionDays: Number(env.FORGE_DELETED_USER_RETENTION_DAYS ?? 30),
     timezone: env.TZ ?? 'UTC',
+    publicUrl: (env.FORGE_PUBLIC_URL ?? 'http://localhost:8080').replace(/\/+$/, ''),
+    mailHostname: env.FORGE_MAIL_HOSTNAME ?? new URL(env.FORGE_PUBLIC_URL ?? 'http://localhost:8080').hostname,
+    smtpRelay: env.FORGE_SMTP_RELAY || null,
   };
 }
 

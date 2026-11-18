@@ -5,6 +5,7 @@ import type { AppContext } from '../../context';
 import { conflict, isUniqueViolation, notFound } from '../../errors';
 import { authenticate, requirePermission } from '../../plugins/auth';
 import { newVerificationToken, normaliseDomain } from '../../services/directory';
+import { ensureDkimKey } from '@forge/mail';
 import type { App } from '../../types';
 
 const { and, asc, count, eq, like } = orm;
@@ -58,6 +59,7 @@ export function adminDomainRoutes(app: App, ctx: AppContext) {
       const name = normaliseDomain(req.body.name);
       try {
         const [d] = await db.insert(domains).values({ orgId: req.principal!.orgId, name, verificationToken: newVerificationToken() }).returning();
+        await ensureDkimKey(ctx.mail, d!).catch((err) => req.log.warn({ err }, 'could not create DKIM key'));
         await ctx.audit.fromRequest(req, { action: 'domain.added', targetType: 'domain', targetId: d!.id, targetLabel: name });
         reply.code(201);
         return { domain: serialize(d!, 0) };

@@ -18,7 +18,7 @@ export interface QueueJobs {
     'prune-backups': { keep: number };
   };
   'mail-delivery': {
-    deliver: { messageId: string };
+    deliver: { outboundId: string };
   };
   'virus-scan': {
     scan: { sha256: string; volume: string };

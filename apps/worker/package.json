@@ -6,6 +6,7 @@
   "dependencies": {
     "@forge/db": "workspace:*",
     "@forge/events": "workspace:*",
+    "@forge/mail": "workspace:*",
     "@forge/storage": "workspace:*",
     "bullmq": "^6.7.7",
     "drizzle-orm": "^0.45.4",

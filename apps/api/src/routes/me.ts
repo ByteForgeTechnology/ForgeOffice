@@ -11,7 +11,8 @@ import {
   verifyPassword,
   verifyTotp,
 } from '@forge/auth';
-import { groupMembers, groups, orm, users } from '@forge/db';
+import { appPasswords, groupMembers, groups, orm, users } from '@forge/db';
+import { randomInt } from 'node:crypto';
 import type { AppContext } from '../context';
 import { HttpError, badRequest, conflict } from '../errors';
 import { authenticate } from '../plugins/auth';
@@ -19,7 +20,7 @@ import { effectiveQuota, getPrimaryOrg, serializeOrg, serializeUser } from '../s
 import type { App } from '../types';
 import { TIMEZONES } from './public';
 
-const { eq } = orm;
+const { and, desc, eq } = orm;
 
 const SETUP_TTL_MS = 10 * 60_000;
 
@@ -187,4 +188,39 @@ export function meRoutes(app: App, ctx: AppContext) {
       return { recoveryCodes: codes };
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // App passwords for IMAP/SMTP/CalDAV/CardDAV clients
+  // ---------------------------------------------------------------------------
+
+  app.get('/api/v1/me/app-passwords', { schema: { tags: ['me'], summary: 'Your app passwords' } }, async (req) => ({
+    items: (await db.select().from(appPasswords).where(eq(appPasswords.userId, req.principal!.user.id)).orderBy(desc(appPasswords.createdAt))).map((a) => ({
+      id: a.id,
+      name: a.name,
+      createdAt: a.createdAt.toISOString(),
+      lastUsedAt: a.lastUsedAt?.toISOString() ?? null,
+      lastUsedIp: a.lastUsedIp,
+    })),
+  }));
+
+  app.post(
+    '/api/v1/me/app-passwords',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } }, schema: { tags: ['me'], summary: 'Create an app password (shown once)', body: Type.Object({ name: Type.String({ minLength: 1, maxLength: 100 }) }) } },
+    async (req, reply) => {
+      const u = req.principal!.user;
+      const alphabet = 'abcdefghijkmnopqrstuvwxyz';
+      const compact = Array.from({ length: 16 }, () => alphabet[randomInt(alphabet.length)]).join('');
+      const [row] = await db.insert(appPasswords).values({ userId: u.id, name: req.body.name.trim(), passwordHash: await hashPassword(compact) }).returning();
+      await ctx.audit.fromRequest(req, { action: 'auth.app_password_created', targetType: 'user', targetId: u.id, targetLabel: u.email, metadata: { name: row!.name } });
+      reply.code(201);
+      return { appPassword: { id: row!.id, name: row!.name }, password: compact.match(/.{4}/g)!.join('-') };
+    },
+  );
+
+  app.delete('/api/v1/me/app-passwords/:id', { schema: { tags: ['me'], summary: 'Revoke an app password', params: Type.Object({ id: Type.String({ format: 'uuid' }) }) } }, async (req) => {
+    const u = req.principal!.user;
+    const [row] = await db.delete(appPasswords).where(and(eq(appPasswords.id, req.params.id), eq(appPasswords.userId, u.id))).returning();
+    if (row) await ctx.audit.fromRequest(req, { action: 'auth.app_password_revoked', targetType: 'user', targetId: u.id, targetLabel: u.email, metadata: { name: row.name } });
+    return { ok: true };
+  });
 }

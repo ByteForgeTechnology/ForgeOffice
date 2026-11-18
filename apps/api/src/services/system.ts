@@ -53,6 +53,13 @@ export async function serviceHealth(ctx: AppContext): Promise<ServiceHealth[]> {
     out.push({ key: 'redis', name: 'Redis', state: ms > 200 ? 'degraded' : 'up', latencyMs: ms });
     const beats = await withTimeout(listHeartbeats(redis), 2_000, 'heartbeat scan');
     const workers = beats.filter((b) => b.service === 'worker');
+    const mailservers = beats.filter((b) => b.service === 'mailserver');
+    out.push({
+      key: 'mailserver',
+      name: 'Mail server (SMTP/IMAP)',
+      state: ctx.config.mail.embed ? 'up' : mailservers.length ? 'up' : 'down',
+      detail: ctx.config.mail.embed ? 'Embedded in the API process' : mailservers.length ? `${mailservers.length} instance(s)` : 'No mail server heartbeat in the last 30 seconds',
+    });
     out.push({
       key: 'worker',
       name: 'Background worker',

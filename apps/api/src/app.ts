@@ -22,7 +22,16 @@ import { adminUserRoutes } from './routes/admin/users';
 import { directoryRoutes } from './routes/directory';
 import { meRoutes } from './routes/me';
 import { publicRoutes } from './routes/public';
+import { adminMailRoutes } from './routes/admin/mail';
+import { adminSharedMailboxRoutes } from './routes/admin/shared-mailboxes';
+import { adminTransportRuleRoutes } from './routes/admin/transport-rules';
+import { adminSenderListRoutes } from './routes/admin/sender-lists';
+import { calendarRoutes } from './routes/calendar';
+import { contactRoutes } from './routes/contacts';
+import { davRoutes } from './routes/dav';
+import { mailRoutes } from './routes/mail';
 import type { App } from './types';
+import { initSharing } from './services/sharing';
 
 export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { logger?: FastifyBaseLogger } = {}) {
   const { config } = ctx;
@@ -41,7 +50,8 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { lo
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'blob:'],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+        frameSrc: ["'self'", 'blob:'],
         connectSrc: ["'self'"],
         fontSrc: ["'self'"],
         objectSrc: ["'none'"],
@@ -72,6 +82,7 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { lo
     if (err.validation) {
       return reply.code(400).send({ error: 'validation_error', message: err.message });
     }
+    if (err.name === 'TransportRejectedError') return reply.code(400).send({ error: 'rejected_by_policy', message: `Your message was not sent: ${err.message}` });
     if (isUniqueViolation(err)) return reply.code(409).send({ error: 'conflict', message: 'That value is already in use' });
     if (err.statusCode && err.statusCode < 500) {
       return reply.code(err.statusCode).send({ error: err.code ?? 'error', message: err.message });
@@ -114,6 +125,7 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { lo
   const scoped = (register: (app: App, ctx: AppContext) => void) =>
     app.register(async (instance) => register(instance as unknown as App, ctx));
 
+  initSharing(ctx.db);
   interactionRoutes(app, ctx, forge, serveSpa);
   await scoped(publicRoutes);
   await scoped(meRoutes);
@@ -125,11 +137,19 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { lo
   await scoped(adminOrgRoutes);
   await scoped(adminAuditRoutes);
   await scoped(adminSystemRoutes);
+  await scoped(adminMailRoutes);
+  await scoped(adminSharedMailboxRoutes);
+  await scoped(adminTransportRuleRoutes);
+  await scoped(adminSenderListRoutes);
+  await scoped(mailRoutes);
+  await scoped(calendarRoutes);
+  await scoped(contactRoutes);
+  await scoped(davRoutes);
 
   app.setNotFoundHandler((req, reply) => {
     const path = req.url.split('?')[0]!;
     const wantsHtml = req.method === 'GET' && (req.headers.accept ?? '').includes('text/html');
-    if (wantsHtml && !path.startsWith('/api/') && !path.startsWith('/oidc/') && !/\.[a-z0-9]+$/i.test(path)) return serveSpa(reply);
+    if (wantsHtml && !path.startsWith('/api/') && !path.startsWith('/oidc/') && !path.startsWith('/dav') && !/\.[a-z0-9]+$/i.test(path)) return serveSpa(reply);
     return reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${path}` });
   });
 

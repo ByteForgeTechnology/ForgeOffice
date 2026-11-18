@@ -1,0 +1,221 @@
+import { resolveMx, resolveTxt } from 'node:dns/promises';
+import { Type } from 'typebox';
+import { domains, groups, orm, outboundMessages, quarantine, resources, userAliases, users } from '@forge/db';
+import { dkimDnsRecord, ensureDkimKey, releaseBlob, releaseFromQuarantine } from '@forge/mail';
+import type { AppContext } from '../../context';
+import { badRequest, conflict, notFound } from '../../errors';
+import { authenticate, requirePermission } from '../../plugins/auth';
+import type { App } from '../../types';
+
+const { and, desc, eq, isNull } = orm;
+const IdParams = Type.Object({ id: Type.String({ format: 'uuid' }) });
+
+export function adminMailRoutes(app: App, ctx: AppContext) {
+  const { db } = ctx;
+  app.addHook('preHandler', authenticate(ctx));
+
+  /** An address may belong to exactly one user, alias, group or resource. */
+  const assertAddressFree = async (orgId: string, address: string) => {
+    const at = address.lastIndexOf('@');
+    if (at < 1) throw badRequest('Invalid address');
+    const [domain] = await db.select().from(domains).where(and(eq(domains.orgId, orgId), eq(domains.name, address.slice(at + 1)))).limit(1);
+    if (!domain) throw badRequest('The address must use one of your organisation’s domains');
+    const checks = await Promise.all([
+      db.select({ id: users.id }).from(users).where(eq(users.email, address)).limit(1),
+      db.select({ id: userAliases.id }).from(userAliases).where(eq(userAliases.address, address)).limit(1),
+      db.select({ id: groups.id }).from(groups).where(eq(groups.email, address)).limit(1),
+      db.select({ id: resources.id }).from(resources).where(eq(resources.email, address)).limit(1),
+    ]);
+    const rows = checks.flat();
+    if (rows.length) throw conflict(`${address} is already in use`);
+  };
+
+  // -------------------------------------------------------------------------
+  // Domain mail DNS
+  // -------------------------------------------------------------------------
+
+  app.get(
+    '/api/v1/admin/domains/:id/mail-dns',
+    { preHandler: requirePermission(ctx, 'org:read'), schema: { tags: ['admin: mail'], summary: 'Required mail DNS records and their current state', params: IdParams } },
+    async (req) => {
+      const [domain] = await db.select().from(domains).where(and(eq(domains.id, req.params.id), eq(domains.orgId, req.principal!.orgId))).limit(1);
+      if (!domain) throw notFound('Domain');
+      if (!domain.dkimPublicKey) domain.dkimPublicKey = await ensureDkimKey(ctx.mail, domain);
+      const host = ctx.config.mail.hostname;
+      const dkim = dkimDnsRecord(domain);
+      const txt = async (name: string) => {
+        try {
+          return (await resolveTxt(name)).map((r) => r.join(''));
+        } catch {
+          return [];
+        }
+      };
+      const [mx, spf, dkimFound, dmarc] = await Promise.all([
+        resolveMx(domain.name).catch(() => []),
+        txt(domain.name),
+        txt(dkim.host),
+        txt(`_dmarc.${domain.name}`),
+      ]);
+      const records = [
+        { purpose: 'Receive mail', type: 'MX', host: domain.name, value: `10 ${host}`, ok: mx.some((m) => m.exchange.toLowerCase() === host.toLowerCase()), found: mx.map((m) => `${m.priority} ${m.exchange}`) },
+        { purpose: 'Authorise this server to send (SPF)', type: 'TXT', host: domain.name, value: `v=spf1 mx a:${host} ~all`, ok: spf.some((v) => v.startsWith('v=spf1') && (v.includes(host) || v.includes(' mx'))), found: spf.filter((v) => v.startsWith('v=spf1')) },
+        { purpose: 'Sign outgoing mail (DKIM)', type: 'TXT', host: dkim.host, value: dkim.value, ok: dkimFound.some((v) => v.replace(/\s/g, '').includes(`p=${domain.dkimPublicKey}`)), found: dkimFound },
+        { purpose: 'Policy for failed checks (DMARC)', type: 'TXT', host: `_dmarc.${domain.name}`, value: `v=DMARC1; p=quarantine; rua=mailto:postmaster@${domain.name}`, ok: dmarc.some((v) => v.startsWith('v=DMARC1')), found: dmarc },
+      ];
+      const catchAll = domain.catchAllUserId ? (await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, domain.catchAllUserId)))[0] : null;
+      return { domain: domain.name, hostname: host, records, catchAll: catchAll ?? null };
+    },
+  );
+
+  app.patch(
+    '/api/v1/admin/domains/:id/mail',
+    {
+      preHandler: requirePermission(ctx, 'domains:manage'),
+      schema: { tags: ['admin: mail'], summary: 'Set the catch-all mailbox', params: IdParams, body: Type.Object({ catchAllUserId: Type.Union([Type.String({ format: 'uuid' }), Type.Null()]) }) },
+    },
+    async (req) => {
+      const orgId = req.principal!.orgId;
+      if (req.body.catchAllUserId) {
+        const [u] = await db.select().from(users).where(and(eq(users.id, req.body.catchAllUserId), eq(users.orgId, orgId))).limit(1);
+        if (!u) throw notFound('User');
+      }
+      const [d] = await db
+        .update(domains)
+        .set({ catchAllUserId: req.body.catchAllUserId })
+        .where(and(eq(domains.id, req.params.id), eq(domains.orgId, orgId)))
+        .returning();
+      if (!d) throw notFound('Domain');
+      await ctx.audit.fromRequest(req, { action: 'domain.catch_all_changed', targetType: 'domain', targetId: d.id, targetLabel: d.name, metadata: { catchAllUserId: req.body.catchAllUserId } });
+      return { ok: true };
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Aliases
+  // -------------------------------------------------------------------------
+
+  app.get('/api/v1/admin/users/:id/aliases', { preHandler: requirePermission(ctx, 'users:read'), schema: { tags: ['admin: mail'], summary: 'Email aliases of a user', params: IdParams } }, async (req) => ({
+    items: await db.select().from(userAliases).where(eq(userAliases.userId, req.params.id)),
+  }));
+
+  app.post(
+    '/api/v1/admin/users/:id/aliases',
+    { preHandler: requirePermission(ctx, 'users:manage'), schema: { tags: ['admin: mail'], summary: 'Add an alias', params: IdParams, body: Type.Object({ address: Type.String({ maxLength: 320 }) }) } },
+    async (req, reply) => {
+      const orgId = req.principal!.orgId;
+      const [user] = await db.select().from(users).where(and(eq(users.id, req.params.id), eq(users.orgId, orgId))).limit(1);
+      if (!user) throw notFound('User');
+      const address = req.body.address.trim().toLowerCase();
+      await assertAddressFree(orgId, address);
+      const [row] = await db.insert(userAliases).values({ userId: user.id, address }).returning();
+      await ctx.audit.fromRequest(req, { action: 'user.alias_added', targetType: 'user', targetId: user.id, targetLabel: user.email, metadata: { address } });
+      reply.code(201);
+      return { alias: row };
+    },
+  );
+
+  app.delete(
+    '/api/v1/admin/users/:id/aliases/:aliasId',
+    { preHandler: requirePermission(ctx, 'users:manage'), schema: { tags: ['admin: mail'], summary: 'Remove an alias', params: Type.Object({ id: Type.String({ format: 'uuid' }), aliasId: Type.String({ format: 'uuid' }) }) } },
+    async (req) => {
+      const [row] = await db.delete(userAliases).where(and(eq(userAliases.id, req.params.aliasId), eq(userAliases.userId, req.params.id))).returning();
+      if (!row) throw notFound('Alias');
+      await ctx.audit.fromRequest(req, { action: 'user.alias_removed', targetType: 'user', targetId: req.params.id, metadata: { address: row.address } });
+      return { ok: true };
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Rooms & equipment
+  // -------------------------------------------------------------------------
+
+  const Resource = Type.Object({
+    name: Type.String({ minLength: 1, maxLength: 200 }),
+    email: Type.String({ maxLength: 320 }),
+    kind: Type.Union([Type.Literal('room'), Type.Literal('equipment')], { default: 'room' }),
+    capacity: Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: 100000 }), Type.Null()])),
+    location: Type.String({ maxLength: 500, default: '' }),
+    autoAccept: Type.Boolean({ default: true }),
+  });
+
+  app.get('/api/v1/admin/resources', { preHandler: requirePermission(ctx, 'org:read'), schema: { tags: ['admin: mail'], summary: 'Rooms and equipment' } }, async (req) => ({
+    items: await db.select().from(resources).where(eq(resources.orgId, req.principal!.orgId)),
+  }));
+
+  app.post('/api/v1/admin/resources', { preHandler: requirePermission(ctx, 'org:manage'), schema: { tags: ['admin: mail'], summary: 'Add a bookable room or equipment', body: Resource } }, async (req, reply) => {
+    const orgId = req.principal!.orgId;
+    const email = req.body.email.trim().toLowerCase();
+    await assertAddressFree(orgId, email);
+    const [row] = await db.insert(resources).values({ ...req.body, email, orgId }).returning();
+    await ctx.audit.fromRequest(req, { action: 'resource.created', targetType: 'resource', targetId: row!.id, targetLabel: row!.name });
+    reply.code(201);
+    return { resource: row };
+  });
+
+  app.patch(
+    '/api/v1/admin/resources/:id',
+    { preHandler: requirePermission(ctx, 'org:manage'), schema: { tags: ['admin: mail'], summary: 'Update a resource', params: IdParams, body: Type.Partial(Type.Omit(Resource, ['email'])) } },
+    async (req) => {
+      const [row] = await db.update(resources).set(req.body).where(and(eq(resources.id, req.params.id), eq(resources.orgId, req.principal!.orgId))).returning();
+      if (!row) throw notFound('Resource');
+      return { resource: row };
+    },
+  );
+
+  app.delete('/api/v1/admin/resources/:id', { preHandler: requirePermission(ctx, 'org:manage'), schema: { tags: ['admin: mail'], summary: 'Delete a resource', params: IdParams } }, async (req) => {
+    const [row] = await db.delete(resources).where(and(eq(resources.id, req.params.id), eq(resources.orgId, req.principal!.orgId))).returning();
+    if (!row) throw notFound('Resource');
+    await ctx.audit.fromRequest(req, { action: 'resource.deleted', targetType: 'resource', targetId: row.id, targetLabel: row.name });
+    return { ok: true };
+  });
+
+  // -------------------------------------------------------------------------
+  // Quarantine & outbound queue
+  // -------------------------------------------------------------------------
+
+  app.get('/api/v1/admin/mail/quarantine', { preHandler: requirePermission(ctx, 'system:read'), schema: { tags: ['admin: mail'], summary: 'Messages held for review' } }, async () => ({
+    items: (await db.select().from(quarantine).where(isNull(quarantine.releasedAt)).orderBy(desc(quarantine.createdAt)).limit(500)).map((q) => ({ ...q, createdAt: q.createdAt.toISOString() })),
+  }));
+
+  app.post('/api/v1/admin/mail/quarantine/:id/release', { preHandler: requirePermission(ctx, 'system:manage'), schema: { tags: ['admin: mail'], summary: 'Deliver a quarantined message', params: IdParams } }, async (req) => {
+    const results = await releaseFromQuarantine(ctx.mail, req.params.id, req.principal!.user.id);
+    if (!results.length) throw notFound('Quarantined message');
+    await ctx.audit.fromRequest(req, { action: 'mail.quarantine_released', targetType: 'quarantine', targetId: req.params.id, metadata: { results } });
+    return { results };
+  });
+
+  app.delete('/api/v1/admin/mail/quarantine/:id', { preHandler: requirePermission(ctx, 'system:manage'), schema: { tags: ['admin: mail'], summary: 'Discard a quarantined message', params: IdParams } }, async (req) => {
+    const [row] = await db.delete(quarantine).where(eq(quarantine.id, req.params.id)).returning();
+    if (!row) throw notFound('Quarantined message');
+    await releaseBlob(ctx.mail, row.blobSha);
+    await ctx.audit.fromRequest(req, { action: 'mail.quarantine_deleted', targetType: 'quarantine', targetId: row.id, targetLabel: row.subject });
+    return { ok: true };
+  });
+
+  app.get(
+    '/api/v1/admin/mail/outbound',
+    { preHandler: requirePermission(ctx, 'system:read'), schema: { tags: ['admin: mail'], summary: 'Outgoing mail queue', querystring: Type.Object({ status: Type.Optional(Type.String({ maxLength: 20 })) }) } },
+    async (req) => {
+      const rows = await db
+        .select({ o: outboundMessages, email: users.email })
+        .from(outboundMessages)
+        .leftJoin(users, eq(users.id, outboundMessages.userId))
+        .where(req.query.status ? eq(outboundMessages.status, req.query.status as typeof outboundMessages.$inferSelect.status) : undefined)
+        .orderBy(desc(outboundMessages.createdAt))
+        .limit(200);
+      return {
+        items: rows.map(({ o, email }) => ({
+          id: o.id,
+          sender: email ?? (o.envelopeFrom || 'system'),
+          subject: o.subject,
+          status: o.status,
+          recipients: o.recipients,
+          lastError: o.lastError,
+          sendAt: o.sendAt.toISOString(),
+          createdAt: o.createdAt.toISOString(),
+        })),
+      };
+    },
+  );
+
+}

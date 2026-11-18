@@ -15,10 +15,10 @@ export function SettingsPage() {
   const { data: branding } = useBranding();
   const org = useQuery({ queryKey: ['admin', 'org'], queryFn: () => api<{ org: Org }>('/api/v1/admin/org') });
   const tz = useQuery({ queryKey: ['setup-status'], queryFn: () => api<{ timezones: string[] }>('/api/v1/setup/status', { anonymous: true }) });
-  const [f, setF] = useState<{ name: string; timezone: string; locale: string; brandColor: string; quotaGb: number; requireMfa: boolean } | null>(null);
+  const [f, setF] = useState<{ name: string; timezone: string; locale: string; brandColor: string; quotaGb: number; requireMfa: boolean; undoSendSeconds: number; maxMb: number } | null>(null);
   useEffect(() => {
     const o = org.data?.org;
-    if (o) setF({ name: o.name, timezone: o.timezone, locale: o.locale, brandColor: o.brandColor, quotaGb: Math.round((o.defaultQuotaBytes / GiB) * 10) / 10, requireMfa: o.requireMfa });
+    if (o) setF({ name: o.name, timezone: o.timezone, locale: o.locale, brandColor: o.brandColor, quotaGb: Math.round((o.defaultQuotaBytes / GiB) * 10) / 10, requireMfa: o.requireMfa, undoSendSeconds: o.undoSendSeconds, maxMb: Math.round(o.mailMaxMessageBytes / 1048576) });
   }, [org.data]);
 
   const refresh = () => {
@@ -30,7 +30,7 @@ export function SettingsPage() {
     mutationFn: () =>
       api('/api/v1/admin/org', {
         method: 'PATCH',
-        body: { name: f!.name, timezone: f!.timezone, locale: f!.locale, brandColor: f!.brandColor, defaultQuotaBytes: Math.round(f!.quotaGb * GiB), requireMfa: f!.requireMfa },
+        body: { name: f!.name, timezone: f!.timezone, locale: f!.locale, brandColor: f!.brandColor, defaultQuotaBytes: Math.round(f!.quotaGb * GiB), requireMfa: f!.requireMfa, undoSendSeconds: f!.undoSendSeconds, mailMaxMessageBytes: f!.maxMb * 1048576 },
       }),
     onSuccess: () => {
       toast.success('Settings saved');
@@ -132,6 +132,18 @@ export function SettingsPage() {
               />
               <Field label="Default storage quota per user (GB)" htmlFor="o-quota" hint="Users with a custom quota are not affected.">
                 <Input id="o-quota" type="number" min={0} step={0.5} value={f.quotaGb} onChange={(e) => set('quotaGb', Number(e.target.value))} className="w-40" />
+              </Field>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader title="Mail" />
+            <CardBody className="grid gap-4 sm:grid-cols-2">
+              <Field label="Undo send window (seconds)" htmlFor="o-undo" hint="0 sends immediately.">
+                <Input id="o-undo" type="number" min={0} max={60} value={f.undoSendSeconds} onChange={(e) => set('undoSendSeconds', Number(e.target.value))} />
+              </Field>
+              <Field label="Maximum message size (MB)" htmlFor="o-max" hint="Applies to incoming and outgoing mail.">
+                <Input id="o-max" type="number" min={1} max={150} value={f.maxMb} onChange={(e) => set('maxMb', Number(e.target.value))} />
               </Field>
             </CardBody>
           </Card>

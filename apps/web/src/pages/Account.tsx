@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldCheck, ShieldOff } from 'lucide-react';
+import { KeyRound, ShieldCheck, ShieldOff, Trash2 } from 'lucide-react';
 import { Alert, Avatar, Badge, Button, Card, CardBody, CardHeader, Dialog, Field, Input, PageHeader, PageSpinner, Select, ThemeSwitcher, formatDateTime, useToast } from '@forge/ui';
 import { RecoveryCodes } from '../components/AuthCard';
 import { api, errorMessage } from '../lib/api';
@@ -22,6 +22,7 @@ export function AccountPage() {
       <ProfileCard />
       <PasswordCard />
       <MfaCard />
+      <AppPasswordsCard />
       <Card>
         <CardHeader title="Appearance" description="Applies to this browser." />
         <CardBody>
@@ -274,6 +275,86 @@ function MfaCard() {
         <Field label="Password" htmlFor="confirm-pw">
           <Input id="confirm-pw" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
+      </Dialog>
+    </Card>
+  );
+}
+
+function AppPasswordsCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [name, setName] = useState('');
+  const [created, setCreated] = useState<{ name: string; password: string } | null>(null);
+  const list = useQuery({
+    queryKey: ['me', 'app-passwords'],
+    queryFn: () => api<{ items: { id: string; name: string; createdAt: string; lastUsedAt: string | null; lastUsedIp: string | null }[] }>('/api/v1/me/app-passwords'),
+  });
+  const create = useMutation({
+    mutationFn: () => api<{ password: string; appPassword: { name: string } }>('/api/v1/me/app-passwords', { body: { name } }),
+    onSuccess: (r) => {
+      setCreated({ name: r.appPassword.name, password: r.password });
+      setName('');
+      void qc.invalidateQueries({ queryKey: ['me', 'app-passwords'] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) => api(`/api/v1/me/app-passwords/${id}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['me', 'app-passwords'] }),
+  });
+  return (
+    <Card>
+      <div id="app-passwords" className="scroll-mt-20" />
+      <CardHeader title="App passwords" description="Sign in mail, calendar and contacts apps (IMAP, SMTP, CalDAV, CardDAV) without your main password. Required when two-step verification is on." />
+      <CardBody className="space-y-4">
+        {list.data?.items.length ? (
+          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {list.data.items.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 py-2 text-sm">
+                <KeyRound className="size-4 text-zinc-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{a.name}</p>
+                  <p className="text-xs text-zinc-500">
+                    Created {formatDateTime(a.createdAt)} · {a.lastUsedAt ? `last used ${formatDateTime(a.lastUsedAt)}${a.lastUsedIp ? ` from ${a.lastUsedIp}` : ''}` : 'never used'}
+                  </p>
+                </div>
+                <Button size="sm" variant="ghost" aria-label={`Revoke ${a.name}`} onClick={() => revoke.mutate(a.id)}>
+                  <Trash2 className="size-4" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-zinc-500">No app passwords yet.</p>
+        )}
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            create.mutate();
+          }}
+        >
+          <Input aria-label="App name" placeholder="e.g. Thunderbird on laptop" value={name} onChange={(e) => setName(e.target.value)} />
+          <Button type="submit" loading={create.isPending} disabled={!name.trim()}>
+            Create
+          </Button>
+        </form>
+      </CardBody>
+      <Dialog
+        open={!!created}
+        onClose={() => setCreated(null)}
+        title={`App password for ${created?.name}`}
+        description="Enter this instead of your normal password. It is shown only once."
+        footer={
+          <>
+            <Button onClick={() => void navigator.clipboard?.writeText(created?.password ?? '')}>Copy</Button>
+            <Button variant="primary" onClick={() => setCreated(null)}>
+              Done
+            </Button>
+          </>
+        }
+      >
+        <code className="block rounded-lg bg-zinc-100 px-3 py-3 text-center font-mono text-xl tracking-widest dark:bg-zinc-800">{created?.password}</code>
       </Dialog>
     </Card>
   );

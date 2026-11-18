@@ -204,7 +204,8 @@ export function interactionRoutes(app: App, ctx: AppContext, forge: ForgeProvide
       const genericFailure = new HttpError(401, 'Incorrect email address or password.', 'invalid_credentials');
 
       const [user] = await db.select().from(users).where(eq(users.email, login)).limit(1);
-      if (!user || user.status === 'deleted') {
+      // Shared mailboxes cannot sign in; treat them like unknown accounts.
+      if (!user || user.status === 'deleted' || user.kind === 'shared') {
         await burnPasswordCheck(req.body.password);
         await ctx.audit.record({ action: 'auth.login', outcome: 'failure', orgId: org?.id, actorLabel: login, metadata: { reason: 'unknown_user' }, ...meta(req) });
         throw genericFailure;

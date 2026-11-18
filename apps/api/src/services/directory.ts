@@ -80,6 +80,7 @@ export interface CreateUserInput {
   mfaRequired?: boolean;
   quotaBytes?: number | null;
   roleKeys?: string[];
+  kind?: 'person' | 'shared';
 }
 
 export async function resolveDomain(db: Database, orgId: string, domainId?: string): Promise<Domain> {
@@ -120,6 +121,7 @@ export async function createUser(db: Database, input: CreateUserInput): Promise<
           mustChangePassword: input.mustChangePassword ?? false,
           mfaRequired: input.mfaRequired ?? false,
           quotaBytes: input.quotaBytes ?? null,
+          kind: input.kind ?? 'person',
         })
         .returning();
       if (!user) throw new Error('insert returned no row');
@@ -177,6 +179,7 @@ export function serializeUser(user: User, extra: { roles?: string[] } = {}) {
     department: user.department,
     timezone: user.timezone,
     status: user.status,
+    kind: user.kind,
     mustChangePassword: user.mustChangePassword,
     mfaRequired: user.mfaRequired,
     mfaEnabled: !!user.totpEnabledAt,
@@ -215,6 +218,8 @@ export function serializeOrg(org: Organization) {
     requireMfa: org.requireMfa,
     brandColor: org.brandColor,
     hasLogo: !!org.logoBlob,
+    undoSendSeconds: org.undoSendSeconds,
+    mailMaxMessageBytes: org.mailMaxMessageBytes,
     setupCompletedAt: org.setupCompletedAt?.toISOString() ?? null,
   };
 }

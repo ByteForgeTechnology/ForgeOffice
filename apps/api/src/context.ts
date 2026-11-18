@@ -3,6 +3,7 @@ import type { Database, DatabaseHandle } from '@forge/db';
 import type { TokenVerifier } from '@forge/auth';
 import type { EventBus, QueueName, Redis, TypedQueue } from '@forge/events';
 import type { BlobStore } from '@forge/storage';
+import type { MailContext } from '@forge/mail';
 import type { AppConfig } from './config';
 import type { DerivedKeys } from './secrets';
 import type { SigningKeys } from './oidc/keys';
@@ -27,4 +28,6 @@ export interface AppContext {
   events: EventEmitter;
   audit: AuditService;
   verifyAccessToken: TokenVerifier;
+  /** Mail engine (stores, delivery, scheduling). */
+  mail: MailContext;
 }

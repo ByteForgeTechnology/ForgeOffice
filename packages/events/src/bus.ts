@@ -7,6 +7,9 @@ export interface ForgeEvents {
   'org.updated': { orgId: string };
   'backup.updated': { backupId: string; status: string };
   'notify.user': { userId: string; title: string; body?: string; link?: string };
+  /** A user's mailbox contents changed (new mail, flags, moves, expunges). */
+  'mail.changed': { userId: string; mailboxId?: string };
+  'calendar.changed': { userIds: string[] };
 }
 
 export type ForgeEventName = keyof ForgeEvents;

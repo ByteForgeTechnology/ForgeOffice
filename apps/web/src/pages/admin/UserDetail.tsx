@@ -176,6 +176,8 @@ export function UserDetailPage() {
 
         <StorageCard user={user} quota={effectiveQuotaBytes} />
 
+        <AliasesCard userId={user.id} editable={canManage} />
+
         <RolesCard user={user} editable={canRoles} onSaved={invalidate} />
 
         <Card>
@@ -374,5 +376,61 @@ function EditUserDialog({ user, open, onClose, onSaved }: { user: User; open: bo
         )}
       </div>
     </Dialog>
+  );
+}
+
+function AliasesCard({ userId, editable }: { userId: string; editable: boolean }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [address, setAddress] = useState('');
+  const aliases = useQuery({ queryKey: ['admin', 'aliases', userId], queryFn: () => api<{ items: { id: string; address: string }[] }>(`/api/v1/admin/users/${userId}/aliases`) });
+  const add = useMutation({
+    mutationFn: () => api(`/api/v1/admin/users/${userId}/aliases`, { body: { address } }),
+    onSuccess: () => {
+      setAddress('');
+      void qc.invalidateQueries({ queryKey: ['admin', 'aliases', userId] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api(`/api/v1/admin/users/${userId}/aliases/${id}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'aliases', userId] }),
+  });
+  return (
+    <Card>
+      <CardHeader title="Email aliases" description="Extra addresses that deliver to this mailbox and can be sent from." />
+      <CardBody className="space-y-3">
+        {aliases.data?.items.length ? (
+          <ul className="space-y-1">
+            {aliases.data.items.map((a) => (
+              <li key={a.id} className="flex items-center justify-between text-sm">
+                <span className="font-mono">{a.address}</span>
+                {editable && (
+                  <Button size="sm" variant="ghost" aria-label={`Remove ${a.address}`} onClick={() => remove.mutate(a.id)}>
+                    <Trash2 className="size-4" />
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-zinc-500">No aliases.</p>
+        )}
+        {editable && (
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              add.mutate();
+            }}
+          >
+            <Input aria-label="New alias" type="email" placeholder="sales@example.com" value={address} onChange={(e) => setAddress(e.target.value)} />
+            <Button type="submit" loading={add.isPending} disabled={!address}>
+              Add
+            </Button>
+          </form>
+        )}
+      </CardBody>
+    </Card>
   );
 }

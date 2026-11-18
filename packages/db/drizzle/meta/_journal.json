@@ -8,6 +8,48 @@
       "when": 1795004884879,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795008337215,
+      "tag": "0001_mail_calendar",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795011018008,
+      "tag": "0002_shared_mailboxes",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795012729423,
+      "tag": "0003_folder_sharing",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795013536053,
+      "tag": "0004_dedupe_default_calendars",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795013869420,
+      "tag": "0005_transport_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795014666416,
+      "tag": "0006_sender_lists",
+      "breakpoints": true
     }
   ]
 }

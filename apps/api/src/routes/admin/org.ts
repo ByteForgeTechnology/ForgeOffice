@@ -38,6 +38,8 @@ export function adminOrgRoutes(app: App, ctx: AppContext) {
           brandColor: Type.Optional(Type.String({ pattern: HEX_COLOR })),
           defaultQuotaBytes: Type.Optional(Type.Integer({ minimum: 0 })),
           requireMfa: Type.Optional(Type.Boolean()),
+          undoSendSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 60 })),
+          mailMaxMessageBytes: Type.Optional(Type.Integer({ minimum: 1024 * 1024, maximum: 150 * 1024 * 1024 })),
         }),
       },
     },

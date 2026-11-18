@@ -7,6 +7,15 @@ import { CallbackPage } from './pages/Callback';
 import { ComingSoonPage } from './pages/ComingSoon';
 import { HomePage } from './pages/Home';
 import { NotFoundPage } from './pages/NotFound';
+import { MailPage } from './pages/mail/Mail';
+import { MailSettingsPage } from './pages/mail/MailSettings';
+import { CalendarPage } from './pages/calendar/Calendar';
+import { ContactsPage } from './pages/contacts/Contacts';
+import { MailAdminPage } from './pages/admin/MailAdmin';
+import { ResourcesPage } from './pages/admin/Resources';
+import { SharedMailboxesPage } from './pages/admin/SharedMailboxes';
+import { TransportRulesPage } from './pages/admin/TransportRules';
+import { SenderListsPage } from './pages/admin/SenderLists';
 import { SearchPage } from './pages/Search';
 import { SetupPage } from './pages/Setup';
 import { SignedOutPage } from './pages/SignedOut';
@@ -41,6 +50,10 @@ export const router = createBrowserRouter([
           { path: 'search', element: <SearchPage /> },
           { path: 'account', element: <AccountPage /> },
           { path: 'apps/:app', element: <ComingSoonPage /> },
+          { path: 'mail', element: <MailPage /> },
+          { path: 'mail/settings', element: <MailSettingsPage /> },
+          { path: 'calendar', element: <CalendarPage /> },
+          { path: 'contacts', element: <ContactsPage /> },
           {
             path: 'admin',
             element: <AdminLayout />,
@@ -55,6 +68,11 @@ export const router = createBrowserRouter([
               { path: 'settings', element: <SettingsPage /> },
               { path: 'audit', element: <AuditPage /> },
               { path: 'queues/:name', element: <QueuePage /> },
+              { path: 'mail', element: <MailAdminPage /> },
+              { path: 'resources', element: <ResourcesPage /> },
+              { path: 'shared-mailboxes', element: <SharedMailboxesPage /> },
+              { path: 'transport-rules', element: <TransportRulesPage /> },
+              { path: 'sender-lists', element: <SenderListsPage /> },
             ],
           },
           { path: '*', element: <NotFoundPage /> },

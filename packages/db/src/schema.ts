@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   bigserial,
   boolean,
@@ -36,6 +37,10 @@ export const organizations = pgTable('organizations', {
   defaultQuotaBytes: bigint('default_quota_bytes', { mode: 'number' }).notNull().default(50 * 1024 ** 3),
   /** When true every user must enrol TOTP MFA at next sign-in. */
   requireMfa: boolean('require_mfa').notNull().default(false),
+  /** Largest message accepted by SMTP and the composer. */
+  mailMaxMessageBytes: integer('mail_max_message_bytes').notNull().default(35 * 1024 * 1024),
+  /** Seconds a sent message is held so the user can undo it. */
+  undoSendSeconds: integer('undo_send_seconds').notNull().default(10),
   brandColor: text('brand_color').notNull().default('#4f46e5'),
   /** SHA-256 of the logo blob in the drive volume, if any. */
   logoBlob: text('logo_blob'),
@@ -58,6 +63,11 @@ export const domains = pgTable(
     /** Value expected in a `forge-verification=<token>` DNS TXT record. */
     verificationToken: text('verification_token').notNull(),
     verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    /** Mail for unknown local parts is delivered here when set. */
+    catchAllUserId: uuid('catch_all_user_id').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
+    dkimSelector: text('dkim_selector').notNull().default('forge'),
+    /** Base64 SPKI public key published in DNS; the private key lives in forge_certs/dkim. */
+    dkimPublicKey: text('dkim_public_key'),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('domains_name_uq').on(t.name), index('domains_org_idx').on(t.orgId)],
@@ -68,6 +78,8 @@ export const domains = pgTable(
 // ---------------------------------------------------------------------------
 
 export const userStatus = pgEnum('user_status', ['active', 'suspended', 'deleted']);
+/** "shared" accounts are mailboxes only: they cannot sign in, members are granted access. */
+export const userKind = pgEnum('user_kind', ['person', 'shared']);
 
 export const users = pgTable(
   'users',
@@ -92,6 +104,7 @@ export const users = pgTable(
     passwordHash: text('password_hash').notNull(),
     mustChangePassword: boolean('must_change_password').notNull().default(false),
     status: userStatus('status').notNull().default('active'),
+    kind: userKind('kind').notNull().default('person'),
     /** Force TOTP enrolment for this user regardless of org policy. */
     mfaRequired: boolean('mfa_required').notNull().default(false),
     /** AES-256-GCM encrypted base32 TOTP secret. */

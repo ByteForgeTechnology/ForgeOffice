@@ -36,11 +36,25 @@ export interface AppConfig {
   composeProject: string;
   extraClients: OidcClientConfig[];
   version: string;
+  mail: {
+    hostname: string;
+    relayUrl: string | null;
+    /** Run SMTP/IMAP inside the API process (development / single-container). */
+    embed: boolean;
+    ports: { smtp?: number; submission?: number; submissions?: number; imap?: number; imaps?: number };
+    allowInsecureAuth: boolean;
+    disableAuthChecks: boolean;
+  };
 }
 
 // Both src/config.ts and dist/main.js live 3 levels below the repo root, so
 // the same relative URLs work in development and in the bundled build.
 const ROOT = new URL('../../../', import.meta.url);
+
+function optionalPort(value: string | undefined, fallback: number | undefined): number | undefined {
+  if (value === 'off') return undefined;
+  return value !== undefined ? Number(value) : fallback;
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const nodeEnv = (env.NODE_ENV ?? 'development') as AppConfig['env'];
@@ -78,6 +92,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dockerSocket: env.FORGE_DOCKER_SOCKET || null,
     composeProject: env.COMPOSE_PROJECT_NAME ?? 'forgeoffice',
     extraClients,
-    version: env.FORGE_VERSION ?? '0.1.0',
+    version: env.FORGE_VERSION ?? '0.2.0',
+    mail: {
+      hostname: env.FORGE_MAIL_HOSTNAME ?? new URL(publicUrl).hostname,
+      relayUrl: env.FORGE_SMTP_RELAY || null,
+      embed: env.FORGE_MAIL_EMBED ? env.FORGE_MAIL_EMBED === 'true' : dev,
+      // Unprivileged ports in development; standard ports when embedded in production.
+      ports: {
+        smtp: optionalPort(env.FORGE_SMTP_PORT, dev ? 2525 : 25),
+        submission: optionalPort(env.FORGE_SUBMISSION_PORT, dev ? 2587 : 587),
+        submissions: optionalPort(env.FORGE_SUBMISSIONS_PORT, dev ? undefined : 465),
+        imap: optionalPort(env.FORGE_IMAP_PORT, dev ? 2143 : 143),
+        imaps: optionalPort(env.FORGE_IMAPS_PORT, dev ? undefined : 993),
+      },
+      allowInsecureAuth: env.FORGE_MAIL_ALLOW_INSECURE_AUTH ? env.FORGE_MAIL_ALLOW_INSECURE_AUTH === 'true' : dev,
+      disableAuthChecks: env.FORGE_MAIL_DISABLE_AUTH_CHECKS === 'true',
+    },
   };
 }
