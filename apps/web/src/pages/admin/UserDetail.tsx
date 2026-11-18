@@ -24,7 +24,7 @@ import {
 import { ConfirmDialog, TemporaryPasswordDialog, UserStatusBadge } from '../../components/admin';
 import { api, errorMessage } from '../../lib/api';
 import { useCan, useMe } from '../../lib/hooks';
-import type { Role, User } from '../../lib/types';
+import { CONTACT_FIELDS, type ContactKey, type Role, type User } from '../../lib/types';
 
 const GiB = 1024 ** 3;
 
@@ -174,6 +174,8 @@ export function UserDetailPage() {
           </CardBody>
         </Card>
 
+        <ContactCard user={user} onEdit={canManage && user.status !== 'deleted' ? () => setEditing(true) : undefined} />
+
         <StorageCard user={user} quota={effectiveQuotaBytes} />
 
         <AliasesCard userId={user.id} editable={canManage} />
@@ -229,6 +231,45 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <span className="text-zinc-500">{label}</span>
       <span className="text-right">{children}</span>
     </div>
+  );
+}
+
+function ContactCard({ user, onEdit }: { user: User; onEdit?: () => void }) {
+  const filled = CONTACT_FIELDS.filter((f) => user[f.key]);
+  return (
+    <Card>
+      <CardHeader
+        title="Contact details"
+        description="Shown in the directory and address books, and used in email signatures."
+        actions={
+          onEdit && (
+            <Button size="sm" variant="ghost" icon={<Pencil className="size-4" />} onClick={onEdit}>
+              Edit
+            </Button>
+          )
+        }
+      />
+      <CardBody className="space-y-3 text-sm">
+        <Row label="Job title">{user.jobTitle || '—'}</Row>
+        <Row label="Department">{user.department || '—'}</Row>
+        {filled.map((f) => (
+          <Row key={f.key} label={f.label}>
+            {f.key === 'website' ? (
+              <a className="text-brand hover:underline" href={/^https?:/i.test(user.website!) ? user.website! : `https://${user.website}`} target="_blank" rel="noreferrer">
+                {user.website}
+              </a>
+            ) : f.key === 'workPhone' || f.key === 'mobilePhone' ? (
+              <a className="hover:underline" href={`tel:${user[f.key]!.replace(/[^\d+]/g, '')}`}>
+                {user[f.key]}
+              </a>
+            ) : (
+              user[f.key]
+            )}
+          </Row>
+        ))}
+        {!filled.length && <p className="text-zinc-500">No phone numbers, website or address yet.</p>}
+      </CardBody>
+    </Card>
   );
 }
 
@@ -303,6 +344,7 @@ function EditUserDialog({ user, open, onClose, onSaved }: { user: User; open: bo
     familyName: user.familyName ?? '',
     jobTitle: user.jobTitle ?? '',
     department: user.department ?? '',
+    contact: Object.fromEntries(CONTACT_FIELDS.map((c) => [c.key, user[c.key] ?? ''])) as Record<ContactKey, string>,
     mfaRequired: user.mfaRequired,
     customQuota: user.quotaBytes != null,
     quotaGb: user.quotaBytes != null ? user.quotaBytes / GiB : 50,
@@ -323,6 +365,7 @@ function EditUserDialog({ user, open, onClose, onSaved }: { user: User; open: bo
           familyName: f.familyName || null,
           jobTitle: f.jobTitle || null,
           department: f.department || null,
+          ...Object.fromEntries(CONTACT_FIELDS.map((c) => [c.key, f.contact[c.key].trim() || null])),
           mfaRequired: f.mfaRequired,
           quotaBytes: f.customQuota ? Math.round(f.quotaGb * GiB) : null,
         },
@@ -365,6 +408,20 @@ function EditUserDialog({ user, open, onClose, onSaved }: { user: User; open: bo
         <Field label="Department" htmlFor="e-dp">
           <Input id="e-dp" value={f.department} onChange={(e) => set('department', e.target.value)} />
         </Field>
+      </div>
+      <p className="mt-6 mb-3 border-t border-zinc-200 pt-4 text-sm font-medium dark:border-zinc-800">Contact details</p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {CONTACT_FIELDS.map((c) => (
+          <Field key={c.key} label={c.label} htmlFor={`e-${c.key}`} className={'wide' in c && c.wide ? 'sm:col-span-2' : undefined}>
+            <Input
+              id={`e-${c.key}`}
+              type={'type' in c ? c.type : 'text'}
+              placeholder={'placeholder' in c ? c.placeholder : undefined}
+              value={f.contact[c.key]}
+              onChange={(e) => set('contact', { ...f.contact, [c.key]: e.target.value })}
+            />
+          </Field>
+        ))}
       </div>
       <div className="mt-6 space-y-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
         <Switch checked={f.mfaRequired} onChange={(v) => set('mfaRequired', v)} label="Require two-step verification" />

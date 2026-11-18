@@ -6,13 +6,27 @@ import type { AppContext } from '../../context';
 import { badRequest, conflict, forbidden, notFound } from '../../errors';
 import { revokeAccount } from '../../oidc/adapter';
 import { authenticate, requirePermission, type Principal } from '../../plugins/auth';
-import { countActiveGlobalAdmins, createUser, effectiveQuota, getPrimaryOrg, serializeUser, userRoleKeys } from '../../services/directory';
+import { CONTACT_FIELDS, cleanContact, countActiveGlobalAdmins, createUser, effectiveQuota, getPrimaryOrg, serializeUser, userRoleKeys } from '../../services/directory';
 import type { App } from '../../types';
 
 const { and, asc, count, desc, eq, ilike, inArray, ne, or } = orm;
 
 const IdParams = Type.Object({ id: Type.String({ format: 'uuid' }) });
 const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
+const contactField = (max = 200) => Type.Optional(Nullable(Type.String({ maxLength: max })));
+const ContactBody = {
+  company: contactField(),
+  officeLocation: contactField(),
+  workPhone: contactField(50),
+  mobilePhone: contactField(50),
+  website: contactField(300),
+  streetAddress: contactField(300),
+  city: contactField(100),
+  region: contactField(100),
+  postalCode: contactField(20),
+  country: contactField(100),
+  pronouns: contactField(50),
+};
 
 /** Human-friendly temporary password satisfying the policy (4 groups of 4). */
 export function generateTemporaryPassword(): string {
@@ -113,6 +127,7 @@ export function adminUserRoutes(app: App, ctx: AppContext) {
           familyName: Type.Optional(Type.String({ maxLength: 100 })),
           jobTitle: Type.Optional(Type.String({ maxLength: 200 })),
           department: Type.Optional(Type.String({ maxLength: 200 })),
+          ...ContactBody,
           password: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
           mustChangePassword: Type.Optional(Type.Boolean()),
           mfaRequired: Type.Optional(Type.Boolean()),
@@ -140,6 +155,7 @@ export function adminUserRoutes(app: App, ctx: AppContext) {
         familyName: b.familyName,
         jobTitle: b.jobTitle,
         department: b.department,
+        ...cleanContact(b),
         password: b.password ?? temporary!,
         mustChangePassword: temporary ? true : (b.mustChangePassword ?? true),
         mfaRequired: b.mfaRequired,
@@ -197,6 +213,7 @@ export function adminUserRoutes(app: App, ctx: AppContext) {
           familyName: Type.Optional(Nullable(Type.String({ maxLength: 100 }))),
           jobTitle: Type.Optional(Nullable(Type.String({ maxLength: 200 }))),
           department: Type.Optional(Nullable(Type.String({ maxLength: 200 }))),
+          ...ContactBody,
           mfaRequired: Type.Optional(Type.Boolean()),
           quotaBytes: Type.Optional(Nullable(Type.Integer({ minimum: 0 }))),
         }),
@@ -207,9 +224,11 @@ export function adminUserRoutes(app: App, ctx: AppContext) {
       const target = await loadTarget(p, req.params.id);
       await assertCanManage(p, target);
       const { displayName, ...rest } = req.body;
+      const contact = cleanContact(rest);
+      for (const k of CONTACT_FIELDS) delete (rest as Record<string, unknown>)[k];
       const [user] = await db
         .update(users)
-        .set({ ...rest, ...(displayName ? { displayName: displayName.trim() } : {}) })
+        .set({ ...rest, ...contact, ...(displayName ? { displayName: displayName.trim() } : {}) })
         .where(eq(users.id, target.id))
         .returning();
       await ctx.audit.fromRequest(req, { action: 'user.updated', targetType: 'user', targetId: target.id, targetLabel: target.email, metadata: { fields: Object.keys(req.body) } });

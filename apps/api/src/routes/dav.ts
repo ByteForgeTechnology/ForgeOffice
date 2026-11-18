@@ -21,7 +21,7 @@ import {
   UidConflictError,
   type CalendarAccess,
 } from '@forge/calendar';
-import { addressBooks, calendarObjects, calendars, contacts, orm, users, type Calendar, type User } from '@forge/db';
+import { addressBooks, calendarObjects, calendars, contacts, organizations, orm, users, type Calendar, type User } from '@forge/db';
 import { authenticateProtocol } from '@forge/mail';
 import type { AppContext } from '../context';
 import type { App } from '../types';
@@ -197,6 +197,8 @@ export function davRoutes(app: App, ctx: AppContext) {
 
   const galCards = async (u: User) => {
     const people = await db.select().from(users).where(and(eq(users.orgId, u.orgId), eq(users.status, 'active'))).orderBy(asc(users.displayName));
+    const [org] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, u.orgId));
+    const orgName = org?.name ?? '';
     return people.map((p) => {
       const vcard = buildVCard({
         uid: p.id,
@@ -204,8 +206,15 @@ export function davRoutes(app: App, ctx: AppContext) {
         givenName: p.givenName ?? '',
         familyName: p.familyName ?? '',
         emails: [{ type: 'work', value: p.email }],
-        organization: p.department ?? '',
+        phones: [
+          ...(p.workPhone ? [{ type: 'work', value: p.workPhone }] : []),
+          ...(p.mobilePhone ? [{ type: 'cell', value: p.mobilePhone }] : []),
+        ],
+        organization: p.company ?? orgName,
+        orgUnit: p.department ?? '',
         title: p.jobTitle ?? '',
+        url: p.website ? (/^https?:\/\//i.test(p.website) ? p.website : `https://${p.website}`) : '',
+        address: { street: p.streetAddress ?? '', city: p.city ?? '', region: p.region ?? '', postalCode: p.postalCode ?? '', country: p.country ?? '' },
       }).replace(/^REV:.*\r\n/m, `REV:${p.updatedAt.toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '')}\r\n`);
       return { href: `${p.id}.vcf`, etag: `"${createHash('sha256').update(vcard).digest('hex').slice(0, 32)}"`, vcard };
     });

@@ -16,6 +16,7 @@ import { ResourcesPage } from './pages/admin/Resources';
 import { SharedMailboxesPage } from './pages/admin/SharedMailboxes';
 import { TransportRulesPage } from './pages/admin/TransportRules';
 import { SenderListsPage } from './pages/admin/SenderLists';
+import { SignatureEditorPage, SignaturesPage } from './pages/admin/Signatures';
 import { SearchPage } from './pages/Search';
 import { SetupPage } from './pages/Setup';
 import { SignedOutPage } from './pages/SignedOut';
@@ -73,6 +74,8 @@ export const router = createBrowserRouter([
               { path: 'shared-mailboxes', element: <SharedMailboxesPage /> },
               { path: 'transport-rules', element: <TransportRulesPage /> },
               { path: 'sender-lists', element: <SenderListsPage /> },
+              { path: 'signatures', element: <SignaturesPage /> },
+              { path: 'signatures/:id', element: <SignatureEditorPage /> },
             ],
           },
           { path: '*', element: <NotFoundPage /> },

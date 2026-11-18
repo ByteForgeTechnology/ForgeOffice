@@ -492,6 +492,54 @@ export const senderLists = pgTable(
 );
 export type SenderListEntry = typeof senderLists.$inferSelect;
 
+/**
+ * Organisation email signatures. The HTML contains {{variables}} filled from
+ * each person's contact details. The first enabled signature (by priority)
+ * whose audience includes the sender is used.
+ */
+export const emailSignatures = pgTable(
+  'email_signatures',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    html: text('html').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    priority: integer('priority').notNull().default(0),
+    /** Everyone, or only members of `groupIds`. */
+    audience: text('audience', { enum: ['all', 'groups'] })
+      .notNull()
+      .default('all'),
+    groupIds: jsonb('group_ids').$type<string[]>().notNull().default([]),
+    /** Insert in new messages / in replies and forwards (webmail). */
+    useForNew: boolean('use_for_new').notNull().default(true),
+    useForReplies: boolean('use_for_replies').notNull().default(true),
+    /** Also append on the server to mail sent from desktop and phone apps (SMTP). */
+    applyToApps: boolean('apply_to_apps').notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [index('email_signatures_org_idx').on(t.orgId, t.priority)],
+);
+export type EmailSignature = typeof emailSignatures.$inferSelect;
+
+/** Images (logos, icons) used in signatures, served publicly so recipients can load them. */
+export const signatureImages = pgTable('signature_images', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
+  blobSha: text('blob_sha').notNull(),
+  mime: text('mime').notNull(),
+  name: text('name').notNull().default(''),
+  createdAt: createdAt(),
+});
+
 // ---------------------------------------------------------------------------
 // Calendars (CalDAV)
 // ---------------------------------------------------------------------------

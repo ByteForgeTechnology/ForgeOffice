@@ -66,7 +66,27 @@ export async function seedBuiltinRoles(db: Database, orgId: string): Promise<voi
   }
 }
 
-export interface CreateUserInput {
+/** Contact details stored per person (beyond name, title and department). */
+export const CONTACT_FIELDS = ['company', 'officeLocation', 'workPhone', 'mobilePhone', 'website', 'streetAddress', 'city', 'region', 'postalCode', 'country', 'pronouns'] as const;
+export type ContactField = (typeof CONTACT_FIELDS)[number];
+export type ContactDetails = Partial<Record<ContactField, string | null>>;
+
+/** Trim contact values; blank becomes null. Only known fields are kept. */
+export function cleanContact(input: Record<string, unknown>): ContactDetails {
+  const out: ContactDetails = {};
+  for (const k of CONTACT_FIELDS) {
+    const v = input[k];
+    if (v === undefined) continue;
+    out[k] = typeof v === 'string' && v.trim() ? v.trim() : null;
+  }
+  if (out.website && !/^(https?:\/\/)?[a-z0-9.-]+\.[a-z]{2,}(\/\S*)?$/i.test(out.website)) throw badRequest('Enter a website such as www.example.com');
+  for (const k of ['workPhone', 'mobilePhone'] as const) if (out[k] && !/^[+\d][\d\s().\-/]*(\s*(x|ext\.?)\s*\d+)?$/i.test(out[k]!)) throw badRequest(`Enter a valid ${k === 'workPhone' ? 'work' : 'mobile'} phone number`);
+  return out;
+}
+
+const contactOf = (user: User) => Object.fromEntries(CONTACT_FIELDS.map((k) => [k, user[k] ?? null])) as Record<ContactField, string | null>;
+
+export interface CreateUserInput extends ContactDetails {
   orgId: string;
   username: string;
   domainId?: string;
@@ -116,6 +136,7 @@ export async function createUser(db: Database, input: CreateUserInput): Promise<
           familyName: input.familyName ?? null,
           jobTitle: input.jobTitle ?? null,
           department: input.department ?? null,
+          ...cleanContact(input as unknown as Record<string, unknown>),
           passwordHash,
           passwordChangedAt: new Date(),
           mustChangePassword: input.mustChangePassword ?? false,
@@ -177,6 +198,7 @@ export function serializeUser(user: User, extra: { roles?: string[] } = {}) {
     familyName: user.familyName,
     jobTitle: user.jobTitle,
     department: user.department,
+    ...contactOf(user),
     timezone: user.timezone,
     status: user.status,
     kind: user.kind,
@@ -204,6 +226,7 @@ export function directoryCard(user: User) {
     displayName: user.displayName,
     jobTitle: user.jobTitle,
     department: user.department,
+    ...contactOf(user),
   };
 }
 

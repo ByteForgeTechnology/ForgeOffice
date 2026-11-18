@@ -14,6 +14,7 @@ export * from './rules';
 export * from './sanitize';
 export * from './scheduler';
 export * from './sender-lists';
+export * from './signature';
 export * from './spam';
 export * from './store';
 export * from './tls';

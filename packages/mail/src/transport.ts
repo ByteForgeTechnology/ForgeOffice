@@ -75,10 +75,13 @@ const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '
  * Append a disclaimer to the text and HTML bodies, re-encoding each edited
  * part as UTF-8/base64. Attachments and other parts are untouched.
  */
-export function appendDisclaimer(raw: Buffer, text: string, html?: string): Buffer {
+export function appendDisclaimer(raw: Buffer, text: string, html?: string, opts: { signature?: boolean } = {}): Buffer {
   const tree = parseMimeTree(raw);
   const targets = bodyParts(tree).sort((a, b) => b.headerStart - a.headerStart);
-  const htmlBlock = `<div style="margin-top:16px;padding-top:8px;border-top:1px solid #d4d4d8;color:#52525b;font-size:12px">${html ?? escapeHtml(text).replace(/\n/g, '<br>')}</div>`;
+  const inner = html ?? escapeHtml(text).replace(/\n/g, '<br>');
+  const htmlBlock = opts.signature
+    ? `<div class="forge-signature" style="margin-top:16px">${inner}</div>`
+    : `<div style="margin-top:16px;padding-top:8px;border-top:1px solid #d4d4d8;color:#52525b;font-size:12px">${inner}</div>`;
   let out = raw;
   for (const part of targets) {
     const body = decodeText(decodePartBody(raw.subarray(part.bodyStart, part.bodyEnd), part.encoding), part.params.charset);

@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import Placeholder from '@tiptap/extension-placeholder';
+import { richTextExtensions } from '../../lib/editor';
 import { Bold, Clock, Italic, Link2, List, ListOrdered, Maximize2, Minimize2, Paperclip, Quote, Send, Strikethrough, Trash2, Underline, X } from 'lucide-react';
 import { Button, cn, formatBytes, useToast } from '@forge/ui';
 import { ApiError, api, errorMessage } from '../../lib/api';
@@ -178,11 +177,31 @@ export function Composer({
   const dirty = useRef(false);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: true } }), Placeholder.configure({ placeholder: 'Write your message…' })],
+    extensions: richTextExtensions('Write your message…'),
     content: initial.html,
     editorProps: { attributes: { class: 'forge-editor min-h-48 px-4 py-3 text-sm focus:outline-none' } },
     onUpdate: () => (dirty.current = true),
   });
+
+  // The organisation signature goes in fresh messages (not reopened drafts), above any quoted text.
+  const signature = useQuery({
+    queryKey: ['mail', 'signature'],
+    queryFn: () => api<{ signature: { html: string; useForNew: boolean; useForReplies: boolean } | null }>('/api/v1/mail/signature'),
+    staleTime: 5 * 60_000,
+    enabled: !initial.draftId,
+  });
+  const signed = useRef(false);
+  useEffect(() => {
+    const sig = signature.data?.signature;
+    if (!editor || signed.current || !sig || initial.draftId) return;
+    if (dirty.current) return; // never overwrite what the person already typed
+    signed.current = true;
+    const isReply = !!(initial.replyToMessageId || initial.forwardMessageId);
+    if (isReply ? !sig.useForReplies : !sig.useForNew) return;
+    const rest = initial.html.replace(/^<p><\/p>/, '');
+    editor.commands.setContent(`<p></p>${sig.html}${rest}`, { emitUpdate: false });
+    editor.commands.focus('start');
+  }, [editor, signature.data, initial]);
 
   const set = <K extends keyof ComposeState>(k: K, v: ComposeState[K]) => {
     dirty.current = true;

@@ -10,7 +10,8 @@ import { signMessage } from './dkim';
 import { headerBlock, headerValue, normaliseLineEndings, parseHeaderBlock, parseMimeTree } from './mime';
 import { isLocalDomain } from './routing';
 import { indexMessage } from './ingest';
-import { applyTransportRules, TransportRejectedError } from './transport';
+import { appendDisclaimer, applyTransportRules, TransportRejectedError } from './transport';
+import { renderSignatureFor } from './signature';
 import { quarantine } from '@forge/db';
 import { appendMessage, moveMessages, releaseBlob, retainBlob, setFlags, specialMailbox } from './store';
 
@@ -40,6 +41,8 @@ export async function submitMessage(ctx: MailContext, input: SubmitInput): Promi
   // Transport rules apply to mail people send (not to bounces, auto-replies and other system mail),
   // before DKIM signing so header/disclaimer edits keep the signature valid.
   let held: string | null = null;
+  // Organisation signatures marked "also for desktop and phone apps" are added to SMTP submissions.
+  if (input.source === 'smtp' && input.userId) raw = await addAppSignature(ctx, input.userId, raw);
   if (input.source !== 'system') {
     const local = await Promise.all(rcpts.map((r) => isLocalDomain(ctx, splitAddress(r).domain)));
     const idx = await indexMessage(raw);
@@ -308,3 +311,16 @@ export async function outboundForUser(ctx: MailContext, userId: string, ids: str
   return ctx.db.select().from(outboundMessages).where(and(eq(outboundMessages.userId, userId), inArray(outboundMessages.id, ids)));
 }
 
+
+async function addAppSignature(ctx: MailContext, userId: string, raw: Buffer): Promise<Buffer> {
+  const [user] = await ctx.db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user || user.kind !== 'person') return raw;
+  const sig = await renderSignatureFor(ctx, user);
+  if (!sig?.signature.applyToApps || !sig.text) return raw;
+  // Skip when the app already added it (or the person pasted it in).
+  const squash = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const body = squash((await indexMessage(raw)).bodyText);
+  const firstLine = squash(sig.text.split('\n').find((l) => l.trim()) ?? '');
+  if (body.includes(squash(sig.text)) || (firstLine.length > 3 && body.includes(firstLine) && body.includes(squash(user.email)))) return raw;
+  return appendDisclaimer(raw, `-- \n${sig.text}`, sig.html, { signature: true });
+}

@@ -10,6 +10,17 @@ export interface User {
   familyName: string | null;
   jobTitle: string | null;
   department: string | null;
+  company: string | null;
+  officeLocation: string | null;
+  workPhone: string | null;
+  mobilePhone: string | null;
+  website: string | null;
+  streetAddress: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  country: string | null;
+  pronouns: string | null;
   timezone: string | null;
   status: UserStatus;
   mustChangePassword: boolean;
@@ -186,3 +197,19 @@ export interface Enrollment {
   uri: string;
   qr: string;
 }
+
+/** Contact details an admin can set per person; also signature variables. */
+export const CONTACT_FIELDS = [
+  { key: 'pronouns', label: 'Pronouns', placeholder: 'she/her' },
+  { key: 'company', label: 'Company', placeholder: 'Defaults to the organisation name' },
+  { key: 'officeLocation', label: 'Office', placeholder: 'London HQ' },
+  { key: 'workPhone', label: 'Work phone', placeholder: '+44 20 7946 0000', type: 'tel' },
+  { key: 'mobilePhone', label: 'Mobile phone', placeholder: '+44 7700 900000', type: 'tel' },
+  { key: 'website', label: 'Website', placeholder: 'www.example.com', type: 'url' },
+  { key: 'streetAddress', label: 'Street address', wide: true },
+  { key: 'city', label: 'City' },
+  { key: 'region', label: 'County / state' },
+  { key: 'postalCode', label: 'Postcode' },
+  { key: 'country', label: 'Country' },
+] as const satisfies readonly { key: keyof User; label: string; placeholder?: string; type?: string; wide?: boolean }[];
+export type ContactKey = (typeof CONTACT_FIELDS)[number]['key'];

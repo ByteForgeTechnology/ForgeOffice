@@ -71,7 +71,15 @@ function fold(line: string): string {
   return out.join('\r\n ');
 }
 
-export function buildVCard(c: Partial<ContactFields> & { fullName: string }): string {
+/** Extra directory fields written to vCards (not parsed back). */
+export interface VCardExtras {
+  orgUnit?: string;
+  url?: string;
+  address?: { street?: string; city?: string; region?: string; postalCode?: string; country?: string };
+}
+
+export function buildVCard(c: Partial<ContactFields> & VCardExtras & { fullName: string }): string {
+  const adr = c.address && Object.values(c.address).some(Boolean) ? c.address : null;
   const uid = c.uid || randomUUID();
   const lines = [
     'BEGIN:VCARD',
@@ -82,7 +90,9 @@ export function buildVCard(c: Partial<ContactFields> & { fullName: string }): st
     `N:${esc(c.familyName ?? '')};${esc(c.givenName ?? '')};;;`,
     ...(c.emails ?? []).filter((e) => e.value).map((e) => `EMAIL;TYPE=${(e.type || 'other').toUpperCase()}:${esc(e.value)}`),
     ...(c.phones ?? []).filter((p) => p.value).map((p) => `TEL;TYPE=${(p.type || 'other').toUpperCase()}:${esc(p.value)}`),
-    ...(c.organization ? [`ORG:${esc(c.organization)}`] : []),
+    ...(c.organization || c.orgUnit ? [`ORG:${esc(c.organization ?? '')}${c.orgUnit ? `;${esc(c.orgUnit)}` : ''}`] : []),
+    ...(c.url ? [`URL:${esc(c.url)}`] : []),
+    ...(adr ? [`ADR;TYPE=WORK:;;${esc(adr.street ?? '')};${esc(adr.city ?? '')};${esc(adr.region ?? '')};${esc(adr.postalCode ?? '')};${esc(adr.country ?? '')}`] : []),
     ...(c.title ? [`TITLE:${esc(c.title)}`] : []),
     ...(c.note ? [`NOTE:${esc(c.note)}`] : []),
     `REV:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '')}`,

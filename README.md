@@ -196,6 +196,16 @@ Rules run in the listed order and apply to incoming, outgoing, internal or all m
 
 The organisation lists apply to mail from outside. A person's block list overrides the organisation's allow list for their mailbox. Allow entries are ignored for mail that fails DMARC, so forged mail can't use them to get past the spam filter. Your own domains can't be on the organisation's allow list. Organisation changes are audited.
 
+**Email signatures.** Admin → Signatures has a visual editor for organisation-wide signatures. It supports fonts, sizes, colours, alignment, links, hosted logo images, and tables for laying out a logo beside text.
+
+- **Variables:** `{{displayName}}`, `{{jobTitle}}`, `{{workPhone}}`, `{{website}}` and others are filled from each person's contact details (Admin → Users → Contact details).
+- **Empty details:** a line whose variables are all empty for someone is left out, as is a separator such as `|` next to an empty value.
+- **Who gets which signature:** each signature applies to everyone or to chosen groups, and the first match in the list wins.
+- **Where it's added:** each signature can be inserted in new messages, in replies and forwards, or both, in webmail. It can also be appended by the server to mail sent from desktop and phone apps (skipped when the message already contains it).
+- **Preview:** shows the result with sample details or for any person.
+
+**Contact details.** Each person can have a company, office, work and mobile phone, website, postal address and pronouns, set by admins. These details appear in the directory, in the organisation address book on phones and desktop apps (as vCard TEL, ORG, URL and ADR), and in signatures.
+
 **App passwords.** IMAP, SMTP and DAV cannot prompt for a second factor. Once a user has MFA, these protocols only accept app passwords, which the user creates under Account → App passwords.
 
 **DNS.** Admin → Domains → *Mail setup* shows the MX, SPF, DKIM and DMARC records to publish and checks them live.

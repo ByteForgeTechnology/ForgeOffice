@@ -4,6 +4,8 @@ export interface SanitizeOptions {
   /** cid → data: URL for inline images. */
   inlineImages?: Record<string, string>;
   allowRemoteImages?: boolean;
+  /** Images under this URL prefix (our own signature images) are never blocked. */
+  trustedImagePrefix?: string;
 }
 
 const REMOTE = /^(https?:)?\/\//i;
@@ -45,7 +47,7 @@ export function sanitizeEmailHtml(html: string, opts: SanitizeOptions = {}): { h
           const data = opts.inlineImages?.[src.slice(4).replace(/^<|>$/g, '')];
           return { tagName: 'img', attribs: { ...attribs, src: data ?? '' } };
         }
-        if (REMOTE.test(src) && !opts.allowRemoteImages) {
+        if (REMOTE.test(src) && !opts.allowRemoteImages && !(opts.trustedImagePrefix && src.startsWith(opts.trustedImagePrefix))) {
           blockedImages++;
           const { src: _s, ...rest } = attribs;
           return { tagName: 'img', attribs: { ...rest, 'data-blocked-src': src } };

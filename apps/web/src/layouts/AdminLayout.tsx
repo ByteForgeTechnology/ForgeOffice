@@ -1,5 +1,5 @@
 import { Navigate, NavLink, Outlet, useLocation } from 'react-router';
-import { Activity, Ban, Building2, DoorOpen, Globe, Inbox, KeyRound, Mail, Route, ScrollText, Users, UsersRound } from 'lucide-react';
+import { Activity, Ban, Building2, Signature, DoorOpen, Globe, Inbox, KeyRound, Mail, Route, ScrollText, Users, UsersRound } from 'lucide-react';
 import { EmptyState, cn } from '@forge/ui';
 import { useMe } from '../lib/hooks';
 
@@ -13,6 +13,7 @@ const NAV = [
   { to: '/admin/mail', label: 'Mail flow', icon: Mail, perm: 'system:read' },
   { to: '/admin/transport-rules', label: 'Transport rules', icon: Route, perm: 'system:read' },
   { to: '/admin/sender-lists', label: 'Blocked & allowed', icon: Ban, perm: 'system:read' },
+  { to: '/admin/signatures', label: 'Signatures', icon: Signature, perm: 'system:read' },
   { to: '/admin/resources', label: 'Rooms', icon: DoorOpen, perm: 'org:read' },
   { to: '/admin/audit', label: 'Audit log', icon: ScrollText, perm: 'audit:read' },
   { to: '/admin/settings', label: 'Organisation', icon: Building2, perm: 'org:read' },

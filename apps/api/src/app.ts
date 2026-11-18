@@ -26,6 +26,7 @@ import { adminMailRoutes } from './routes/admin/mail';
 import { adminSharedMailboxRoutes } from './routes/admin/shared-mailboxes';
 import { adminTransportRuleRoutes } from './routes/admin/transport-rules';
 import { adminSenderListRoutes } from './routes/admin/sender-lists';
+import { adminSignatureRoutes, signatureImageRoutes } from './routes/admin/signatures';
 import { calendarRoutes } from './routes/calendar';
 import { contactRoutes } from './routes/contacts';
 import { davRoutes } from './routes/dav';
@@ -141,6 +142,8 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { lo
   await scoped(adminSharedMailboxRoutes);
   await scoped(adminTransportRuleRoutes);
   await scoped(adminSenderListRoutes);
+  await scoped(adminSignatureRoutes);
+  await scoped(signatureImageRoutes);
   await scoped(mailRoutes);
   await scoped(calendarRoutes);
   await scoped(contactRoutes);

@@ -52,6 +52,7 @@ import {
   mailboxAccess,
   onBehalfAddresses,
   sharedOwnerByAddress,
+  renderSignatureFor,
   type ComposeAttachment,
 } from '@forge/mail';
 import type { AppContext } from '../context';
@@ -401,7 +402,7 @@ export function mailRoutes(app: App, ctx: AppContext) {
       if (a.cid && a.size < 3 * 1024 * 1024 && a.contentType.startsWith('image/')) inlineImages[a.cid] = `data:${a.contentType};base64,${a.content.toString('base64')}`;
     }
     const sourceHtml = typeof parsed.html === 'string' && parsed.html ? parsed.html : textToHtml(parsed.text ?? '');
-    const { html, blockedImages } = sanitizeEmailHtml(sourceHtml, { inlineImages, allowRemoteImages });
+    const { html, blockedImages } = sanitizeEmailHtml(sourceHtml, { inlineImages, allowRemoteImages, trustedImagePrefix: `${ctx.config.publicUrl}/api/v1/signature-images/` });
     return { html, text: parsed.text ?? '', blockedImages };
   };
 
@@ -874,6 +875,12 @@ export function mailRoutes(app: App, ctx: AppContext) {
       return { ok: true };
     },
   );
+
+  // The organisation signature for the signed-in person, rendered with their contact details.
+  app.get('/api/v1/mail/signature', { schema: { tags: ['mail'], summary: 'Your email signature (set by the organisation)' } }, async (req) => {
+    const sig = await renderSignatureFor(mail, req.principal!.user);
+    return { signature: sig ? { name: sig.signature.name, html: sig.html, useForNew: sig.signature.useForNew, useForReplies: sig.signature.useForReplies } : null };
+  });
 
   // Blocked & allowed senders for this mailbox (or a shared mailbox with full access).
   app.get('/api/v1/mail/sender-lists', { schema: { tags: ['mail'], summary: 'Blocked and allowed senders' } }, async (req) => ({
