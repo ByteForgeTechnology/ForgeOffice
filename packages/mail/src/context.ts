@@ -14,8 +14,10 @@ export interface MailConfig {
   hostname: string;
   publicUrl: string;
   certsDir: string;
-  /** Optional smarthost, e.g. smtp://user:pass@relay.example.com:587. */
+  /** Optional smarthost from the environment, e.g. smtp://user:pass@relay.example.com:587 (the admin setting takes precedence). */
   relayUrl: string | null;
+  /** Master secret, used to decrypt the stored smarthost password (read from the certs volume when not given). */
+  masterSecret?: string;
   /** Skip SPF/DKIM/DMARC lookups (tests and offline development). */
   disableAuthChecks: boolean;
   /** Remote MX port override (tests). */

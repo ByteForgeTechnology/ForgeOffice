@@ -41,6 +41,22 @@ export const organizations = pgTable('organizations', {
   mailMaxMessageBytes: integer('mail_max_message_bytes').notNull().default(35 * 1024 * 1024),
   /** Seconds a sent message is held so the user can undo it. */
   undoSendSeconds: integer('undo_send_seconds').notNull().default(10),
+  /**
+   * Outgoing smarthost (SMTP relay). When on, mail for other organisations is
+   * handed to this server instead of being delivered directly to each domain's MX.
+   */
+  smtpRelayEnabled: boolean('smtp_relay_enabled').notNull().default(false),
+  smtpRelayHost: text('smtp_relay_host'),
+  smtpRelayPort: integer('smtp_relay_port').notNull().default(587),
+  /** starttls: plain connection upgraded with STARTTLS (required); tls: TLS from the start (465); none: no encryption. */
+  smtpRelaySecurity: text('smtp_relay_security', { enum: ['starttls', 'tls', 'none'] })
+    .notNull()
+    .default('starttls'),
+  smtpRelayUsername: text('smtp_relay_username'),
+  /** AES-GCM encrypted with a key derived from the master secret. */
+  smtpRelayPasswordEnc: text('smtp_relay_password_enc'),
+  /** Only use the relay for these recipient domains (and their subdomains); empty = all outside mail. */
+  smtpRelayDomains: jsonb('smtp_relay_domains').$type<string[]>().notNull().default([]),
   brandColor: text('brand_color').notNull().default('#4f46e5'),
   /** SHA-256 of the logo blob in the drive volume, if any. */
   logoBlob: text('logo_blob'),

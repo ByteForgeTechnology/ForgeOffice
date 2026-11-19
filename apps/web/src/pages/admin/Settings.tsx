@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ImageUp, Trash2 } from 'lucide-react';
-import { Button, Card, CardBody, CardHeader, Field, Input, PageHeader, PageSpinner, Select, Switch, useToast } from '@forge/ui';
+import { CircleCheck, CircleX, ImageUp, PlugZap, Send, Trash2 } from 'lucide-react';
+import { Alert, Button, Card, CardBody, CardHeader, Field, Input, PageHeader, PageSpinner, Select, Switch, Textarea, useToast } from '@forge/ui';
 import { api, errorMessage } from '../../lib/api';
 import { readFileAsDataUrl, useBranding, useCan } from '../../lib/hooks';
 import type { Org } from '../../lib/types';
@@ -157,6 +157,137 @@ export function SettingsPage() {
   );
 }
 
+interface Smarthost {
+  enabled: boolean;
+  host: string;
+  port: number;
+  security: 'starttls' | 'tls' | 'none';
+  username: string | null;
+  hasPassword: boolean;
+  domains: string[];
+  environmentRelay: boolean;
+  hostname: string;
+}
+
+const PORT_FOR: Record<Smarthost['security'], number> = { starttls: 587, tls: 465, none: 25 };
+
+/** Outgoing smarthost: hand outside mail to a provider's relay (Microsoft 365, Google, SendGrid, Mailgun, your ISP…). */
+function SmarthostCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const canManage = useCan('org:manage');
+  const current = useQuery({ queryKey: ['admin', 'smarthost'], queryFn: () => api<Smarthost>('/api/v1/admin/mail/smarthost') });
+  const [f, setF] = useState<(Smarthost & { password: string; domainText: string }) | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [sendTo, setSendTo] = useState('');
+  useEffect(() => {
+    if (current.data) setF({ ...current.data, password: '', domainText: current.data.domains.join('\n') });
+  }, [current.data]);
+
+  const body = () => ({
+    enabled: f!.enabled,
+    host: f!.host.trim(),
+    port: f!.port,
+    security: f!.security,
+    username: f!.username?.trim() || null,
+    // Blank keeps the saved password.
+    ...(f!.password ? { password: f!.password } : {}),
+    domains: f!.domainText.split(/[\s,]+/).filter(Boolean),
+  });
+  const save = useMutation({
+    mutationFn: () => api<Smarthost>('/api/v1/admin/mail/smarthost', { method: 'PUT', body: body() }),
+    onSuccess: (r) => {
+      toast.success(r.enabled ? `Outside mail now goes through ${r.host}` : 'Smarthost settings saved');
+      void qc.invalidateQueries({ queryKey: ['admin', 'smarthost'] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const test = useMutation({
+    mutationFn: (withMessage: boolean) => api<{ ok: boolean; message: string }>('/api/v1/admin/mail/smarthost/test', { body: { ...body(), ...(withMessage ? { sendTo } : {}) } }),
+    onSuccess: setResult,
+    onError: (e) => setResult({ ok: false, message: errorMessage(e) }),
+  });
+  if (!f) return <PageSpinner />;
+  const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => {
+    setResult(null);
+    setF({ ...f, [k]: v });
+  };
+
+  return (
+    <Card>
+      <CardHeader
+        title="Outgoing smarthost (SMTP relay)"
+        description="Send mail for other organisations through your provider's relay instead of delivering it directly. Useful when your network blocks port 25, or to use a sending service with a good reputation. Mail between your own people is never relayed."
+      />
+      <CardBody>
+        <fieldset disabled={!canManage} className="space-y-4">
+          <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} label="Use a smarthost" description={f.enabled ? undefined : f.environmentRelay ? 'Off: outside mail uses the relay set in FORGE_SMTP_RELAY.' : 'Off: outside mail is delivered directly to each domain’s mail server.'} />
+          <div className="grid gap-4 sm:grid-cols-[1fr_7rem]">
+            <Field label="Host" htmlFor="sh-host">
+              <Input id="sh-host" value={f.host} onChange={(e) => set('host', e.target.value)} placeholder="smtp.example.com" autoComplete="off" />
+            </Field>
+            <Field label="Port" htmlFor="sh-port">
+              <Input id="sh-port" type="number" min={1} max={65535} value={f.port} onChange={(e) => set('port', Number(e.target.value))} />
+            </Field>
+          </div>
+          <Field label="Security" htmlFor="sh-sec">
+            <Select id="sh-sec" value={f.security} onChange={(e) => {
+              const security = e.target.value as Smarthost['security'];
+              setResult(null);
+              setF({ ...f, security, port: f.port === PORT_FOR[f.security] ? PORT_FOR[security] : f.port });
+            }}>
+              <option value="starttls">STARTTLS, required (usually port 587)</option>
+              <option value="tls">TLS from the start (usually port 465)</option>
+              <option value="none">None (only for a relay on a trusted private network)</option>
+            </Select>
+          </Field>
+          {f.security === 'none' && f.username && <Alert tone="warning">Without encryption the password is sent in plain text. Use STARTTLS or TLS unless the relay is on your own private network.</Alert>}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Username (optional)" htmlFor="sh-user" hint="Leave empty if the relay accepts mail from this server's IP address.">
+              <Input id="sh-user" value={f.username ?? ''} onChange={(e) => set('username', e.target.value)} autoComplete="off" />
+            </Field>
+            <Field label="Password" htmlFor="sh-pass" hint={f.hasPassword ? 'Saved. Leave empty to keep it.' : undefined}>
+              <Input id="sh-pass" type="password" value={f.password} onChange={(e) => set('password', e.target.value)} placeholder={f.hasPassword ? '••••••••' : ''} autoComplete="new-password" />
+            </Field>
+          </div>
+          <Field label="Only for these domains (optional)" htmlFor="sh-domains" hint="One per line; includes subdomains. Leave empty to relay all outside mail. Other domains are delivered directly.">
+            <Textarea id="sh-domains" rows={2} className="font-mono text-xs" value={f.domainText} onChange={(e) => set('domainText', e.target.value)} placeholder="gmail.com" />
+          </Field>
+
+          {result && (
+            <Alert tone={result.ok ? 'success' : 'danger'}>
+              <span className="flex items-start gap-2">
+                {result.ok ? <CircleCheck className="mt-0.5 size-4 shrink-0" /> : <CircleX className="mt-0.5 size-4 shrink-0" />} {result.message}
+              </span>
+            </Alert>
+          )}
+          {canManage && (
+            <div className="space-y-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+              <div className="flex flex-wrap gap-2">
+                <Button icon={<PlugZap className="size-4" />} loading={test.isPending && test.variables === false} disabled={!f.host.trim()} onClick={() => test.mutate(false)}>
+                  Test connection
+                </Button>
+                <div className="flex min-w-64 flex-1 gap-2">
+                  <Input aria-label="Send a test message to" type="email" placeholder="Send a test message to…" value={sendTo} onChange={(e) => setSendTo(e.target.value)} />
+                  <Button icon={<Send className="size-4" />} loading={test.isPending && test.variables === true} disabled={!f.host.trim() || !sendTo} onClick={() => test.mutate(true)}>
+                    Send
+                  </Button>
+                </div>
+              </div>
+              <Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>
+                Save smarthost
+              </Button>
+            </div>
+          )}
+          <p className="text-xs text-zinc-500">
+            Tip: many providers only accept mail from addresses or domains you have verified with them. Keep SPF for your domains up to date to include the relay, and check DKIM still passes in Domains → Mail setup.
+          </p>
+        </fieldset>
+      </CardBody>
+    </Card>
+  );
+}
+
 /** ForgeDirectory → Sign-in & security. */
 export function DirectorySecurityPage() {
   const { f, set, save } = useOrgForm(
@@ -196,6 +327,7 @@ export function MailOrgSettingsPage() {
   );
   if (!f) return <PageSpinner />;
   return (
+    <div className="max-w-3xl space-y-6">
     <SettingsForm title="Mail settings" description="Organisation-wide settings for ForgeMail." save={save}>
       <Card>
         <CardHeader title="Sending" />
@@ -209,5 +341,7 @@ export function MailOrgSettingsPage() {
         </CardBody>
       </Card>
     </SettingsForm>
+    <SmarthostCard />
+    </div>
   );
 }

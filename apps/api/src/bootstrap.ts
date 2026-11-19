@@ -56,6 +56,7 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
       publicUrl: config.publicUrl,
       certsDir: config.volumes.certs.path,
       relayUrl: config.mail.relayUrl,
+      masterSecret: secret,
       disableAuthChecks: config.mail.disableAuthChecks,
     },
   });

@@ -71,6 +71,13 @@
       "when": 1795099423443,
       "tag": "0009_oauth_apps",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795100332901,
+      "tag": "0010_smtp_relay",
+      "breakpoints": true
     }
   ]
 }

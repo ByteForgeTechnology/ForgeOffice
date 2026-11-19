@@ -1,7 +1,9 @@
 import { resolveMx, resolveTxt } from 'node:dns/promises';
-import { Type } from 'typebox';
-import { domains, groups, orm, outboundMessages, quarantine, resources, userAliases, users } from '@forge/db';
-import { dkimDnsRecord, ensureDkimKey, releaseBlob, releaseFromQuarantine } from '@forge/mail';
+import { Type, type Static } from 'typebox';
+import { domains, groups, organizations, orm, outboundMessages, quarantine, resources, userAliases, users } from '@forge/db';
+import { configuredRelay, dkimDnsRecord, ensureDkimKey, isValidAddress, releaseBlob, releaseFromQuarantine, testRelay, type RelaySettings } from '@forge/mail';
+import { encryptString } from '@forge/auth';
+import { getPrimaryOrg } from '../../services/directory';
 import { renameCalendarAddress } from '@forge/calendar';
 import type { AppContext } from '../../context';
 import { badRequest, conflict, notFound } from '../../errors';
@@ -88,6 +90,110 @@ export function adminMailRoutes(app: App, ctx: AppContext) {
       if (!d) throw notFound('Domain');
       await ctx.audit.fromRequest(req, { action: 'domain.catch_all_changed', targetType: 'domain', targetId: d.id, targetLabel: d.name, metadata: { catchAllUserId: req.body.catchAllUserId } });
       return { ok: true };
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Outgoing smarthost (SMTP relay)
+  // -------------------------------------------------------------------------
+
+  const HOST_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$|^\d{1,3}(\.\d{1,3}){3}$|^\[[0-9a-f:]+\]$/i;
+  const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
+  const RelayBody = Type.Object({
+    enabled: Type.Boolean(),
+    host: Type.String({ maxLength: 253 }),
+    port: Type.Integer({ minimum: 1, maximum: 65535 }),
+    security: Type.Union([Type.Literal('starttls'), Type.Literal('tls'), Type.Literal('none')]),
+    username: Type.Union([Type.String({ maxLength: 320 }), Type.Null()]),
+    /** Omit to keep the saved password; null or "" clears it. */
+    password: Type.Optional(Type.Union([Type.String({ maxLength: 1024 }), Type.Null()])),
+    domains: Type.Array(Type.String({ maxLength: 253 }), { maxItems: 200 }),
+  });
+
+  const relayState = async () => {
+    const org = await getPrimaryOrg(db);
+    if (!org) throw notFound('Organisation');
+    return {
+      org,
+      view: {
+        enabled: org.smtpRelayEnabled,
+        host: org.smtpRelayHost ?? '',
+        port: org.smtpRelayPort,
+        security: org.smtpRelaySecurity,
+        username: org.smtpRelayUsername,
+        hasPassword: !!org.smtpRelayPasswordEnc,
+        domains: org.smtpRelayDomains,
+        /** FORGE_SMTP_RELAY is set: used whenever the smarthost here is off or out of scope. */
+        environmentRelay: !!ctx.config.mail.relayUrl,
+        hostname: ctx.config.mail.hostname,
+      },
+    };
+  };
+
+  const checkRelay = (b: { enabled: boolean; host: string; domains: string[]; security: string; username: string | null }) => {
+    const host = b.host.trim().toLowerCase();
+    if (b.enabled && !host) throw badRequest('Enter the smarthost’s host name');
+    if (host && !HOST_RE.test(host)) throw badRequest('Enter a host name such as smtp.example.com');
+    const domainsList = [...new Set(b.domains.map((d) => d.trim().toLowerCase().replace(/^\*?\.?/, '')).filter(Boolean))];
+    const bad = domainsList.find((d) => !DOMAIN_RE.test(d));
+    if (bad) throw badRequest(`Not a domain: ${bad}`);
+    return { host, domains: domainsList, username: b.username?.trim() || null };
+  };
+
+  app.get('/api/v1/admin/mail/smarthost', { preHandler: requirePermission(ctx, 'org:read'), schema: { tags: ['admin: mail'], summary: 'Outgoing smarthost (SMTP relay)' } }, async () => (await relayState()).view);
+
+  app.put(
+    '/api/v1/admin/mail/smarthost',
+    { preHandler: requirePermission(ctx, 'org:manage'), schema: { tags: ['admin: mail'], summary: 'Configure the outgoing smarthost', body: RelayBody } },
+    async (req) => {
+      const { org } = await relayState();
+      const b = req.body;
+      const clean = checkRelay(b);
+      const password = b.password === undefined ? undefined : b.password ? encryptString(ctx.keys.smtpRelayKey, b.password) : null;
+      await db
+        .update(organizations)
+        .set({
+          smtpRelayEnabled: b.enabled,
+          smtpRelayHost: clean.host || null,
+          smtpRelayPort: b.port,
+          smtpRelaySecurity: b.security,
+          smtpRelayUsername: clean.username,
+          ...(password !== undefined ? { smtpRelayPasswordEnc: password } : {}),
+          smtpRelayDomains: clean.domains,
+        })
+        .where(eq(organizations.id, org.id));
+      await ctx.audit.fromRequest(req, {
+        action: 'mail.smarthost_updated',
+        targetType: 'organization',
+        targetId: org.id,
+        metadata: { enabled: b.enabled, host: clean.host, port: b.port, security: b.security, username: clean.username, passwordChanged: password !== undefined, domains: clean.domains },
+      });
+      return (await relayState()).view;
+    },
+  );
+
+  app.post(
+    '/api/v1/admin/mail/smarthost/test',
+    {
+      preHandler: requirePermission(ctx, 'org:manage'),
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['admin: mail'],
+        summary: 'Test smarthost settings (connect and sign in; optionally send a test message)',
+        body: Type.Intersect([RelayBody, Type.Object({ sendTo: Type.Optional(Type.String({ maxLength: 320 })) })]),
+      },
+    },
+    async (req) => {
+      const b = req.body as Static<typeof RelayBody> & { sendTo?: string };
+      const clean = checkRelay({ ...b, enabled: true });
+      // Without a new password, test with the saved one.
+      let password = b.password ?? null;
+      if (b.password === undefined) password = (await configuredRelay(ctx.mail, { ...(await relayState()).org, smtpRelayEnabled: true, smtpRelayHost: clean.host }).catch(() => null))?.password ?? null;
+      const settings: RelaySettings = { host: clean.host, port: b.port, security: b.security, username: clean.username, password };
+      if (b.sendTo && !isValidAddress(b.sendTo)) throw badRequest('Enter a valid email address to send the test to');
+      const result = await testRelay(settings, ctx.config.mail.hostname, b.sendTo ? { from: req.principal!.user.email, to: b.sendTo.trim() } : undefined);
+      await ctx.audit.fromRequest(req, { action: 'mail.smarthost_tested', outcome: result.ok ? 'success' : 'failure', metadata: { host: clean.host, port: b.port, sentTo: b.sendTo ?? null, result: result.message } });
+      return result;
     },
   );
 

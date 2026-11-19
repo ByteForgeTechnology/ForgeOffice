@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { deriveKey, randomToken } from '@forge/auth';
+import { smarthostKey } from '@forge/mail';
 
 async function readOrCreate(path: string, create: () => string): Promise<string> {
   try {
@@ -38,6 +39,8 @@ export interface DerivedKeys {
   shareLinkKey: Buffer;
   /** Encrypts OAuth client secrets of registered applications. */
   oauthSecretKey: Buffer;
+  /** Encrypts the SMTP smarthost password (shared with the worker and mail server). */
+  smtpRelayKey: Buffer;
 }
 
 export function deriveKeys(secret: string): DerivedKeys {
@@ -46,6 +49,7 @@ export function deriveKeys(secret: string): DerivedKeys {
     totpKey: deriveKey(secret, 'totp-secrets'),
     shareLinkKey: deriveKey(secret, 'share-links'),
     oauthSecretKey: deriveKey(secret, 'oauth-client-secrets'),
+    smtpRelayKey: smarthostKey(secret),
   };
 }
 

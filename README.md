@@ -156,7 +156,7 @@ Each outgoing message is processed as follows:
 
 1. It is DKIM-signed with a per-domain key generated automatically into `forge_certs/dkim`.
 2. It is queued on BullMQ. Webmail sends are held for the undo window or until the scheduled time.
-3. The worker delivers it directly to the recipient's MX with opportunistic TLS, or through `FORGE_SMTP_RELAY`.
+3. The worker delivers it directly to the recipient's MX with opportunistic TLS, or through a smarthost (see below).
 4. Failures are retried with exponential backoff (8 attempts).
 5. If delivery finally fails, a non-delivery report goes to the sender's inbox.
 
@@ -237,6 +237,15 @@ The organisation lists apply to mail from outside. A person's block list overrid
 | Issuer / discovery | `<public URL>/oidc`, `/oidc/.well-known/openid-configuration` |
 | Authorization, token, userinfo | `/oidc/auth`, `/oidc/token`, `/oidc/me` |
 | Keys, sign-out, revocation | `/oidc/jwks`, `/oidc/session/end`, `/oidc/token/revocation` |
+
+**Outgoing smarthost.** Admin → ForgeMail → Mail settings can send mail for other organisations through an SMTP relay instead of delivering it directly. Use this when port 25 is blocked, or to send through Microsoft 365, Google Workspace, SendGrid, Mailgun or your ISP.
+
+- **Connection:** host, port and security: STARTTLS (required, usually 587), TLS from the start (465), or none (trusted private networks only). The relay's certificate is always verified.
+- **Login:** an optional username and password. The password is stored encrypted with a key derived from the master secret, so the worker can use it, and it is never shown again.
+- **Scope:** optionally limit the relay to some recipient domains (including their subdomains); other mail is delivered directly. Mail between your own people is never relayed.
+- **Testing:** *Test connection* checks that it can connect and sign in; *Send* delivers a test message through the relay.
+- **Failures:** if the relay is unreachable or rejects the login, messages are deferred and retried rather than bounced. The error is shown in the delivery queue.
+- **Environment relay:** `FORGE_SMTP_RELAY` still works and is used when the admin smarthost is off, or for domains outside its list.
 
 **App passwords.** IMAP, SMTP and DAV cannot prompt for a second factor. Once a user has MFA, these protocols only accept app passwords, which the user creates under Account → App passwords.
 

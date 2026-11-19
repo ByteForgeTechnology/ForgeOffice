@@ -16,6 +16,7 @@ export * from './scheduler';
 export * from './sender-lists';
 export * from './signature';
 export * from './flag-tasks';
+export * from './smarthost';
 export * from './spam';
 export * from './store';
 export * from './tls';

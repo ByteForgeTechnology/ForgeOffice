@@ -12,6 +12,7 @@ import { isLocalDomain } from './routing';
 import { indexMessage } from './ingest';
 import { appendDisclaimer, applyTransportRules, TransportRejectedError } from './transport';
 import { renderSignatureFor } from './signature';
+import { relayFor } from './smarthost';
 import { quarantine } from '@forge/db';
 import { appendMessage, moveMessages, releaseBlob, retainBlob, setFlags, specialMailbox } from './store';
 
@@ -143,8 +144,11 @@ interface RemoteResult {
   response: string;
 }
 
-function transportFor(ctx: MailContext, host: string | null) {
-  if (ctx.config.relayUrl) return createTransport(ctx.config.relayUrl);
+type Relay = Awaited<ReturnType<typeof relayFor>>;
+
+function transportFor(ctx: MailContext, host: string | null, relay: Relay) {
+  if (relay?.via === 'smarthost') return createTransport(relay.options);
+  if (relay?.via === 'env') return createTransport(relay.url);
   return createTransport({
     host: host!,
     port: ctx.config.remotePort ?? 25,
@@ -158,8 +162,8 @@ function transportFor(ctx: MailContext, host: string | null) {
   } as Parameters<typeof createTransport>[0]);
 }
 
-async function sendVia(ctx: MailContext, host: string | null, from: string, rcpts: string[], raw: Buffer): Promise<RemoteResult[]> {
-  const transport = transportFor(ctx, host);
+async function sendVia(ctx: MailContext, host: string | null, from: string, rcpts: string[], raw: Buffer, relay: Relay = null): Promise<RemoteResult[]> {
+  const transport = transportFor(ctx, host, relay);
   try {
     const info = (await transport.sendMail({ envelope: { from, to: rcpts }, raw })) as {
       accepted: string[];
@@ -177,14 +181,23 @@ async function sendVia(ctx: MailContext, host: string | null, from: string, rcpt
   }
 }
 
-/** Deliver to one remote domain via MX lookup (or the configured relay). */
+/** Deliver to one remote domain via MX lookup, or through the smarthost. */
 async function deliverRemoteDomain(ctx: MailContext, from: string, domain: string, rcpts: string[], raw: Buffer): Promise<RemoteResult[]> {
-  if (ctx.config.relayUrl) {
+  let relay: Relay;
+  try {
+    relay = await relayFor(ctx, domain);
+  } catch (err) {
+    return rcpts.map((address) => ({ address, ok: false, permanent: false, response: (err as Error).message }));
+  }
+  if (relay) {
     try {
-      return await sendVia(ctx, null, from, rcpts, raw);
+      return await sendVia(ctx, null, from, rcpts, raw, relay);
     } catch (err) {
-      const e = err as { responseCode?: number; response?: string; message: string };
-      return rcpts.map((address) => ({ address, ok: false, permanent: (e.responseCode ?? 0) >= 500, response: e.response ?? e.message }));
+      const e = err as { responseCode?: number; response?: string; message: string; code?: string };
+      // Problems reaching or signing in to the relay are temporary on our side: retry later.
+      const permanent = (e.responseCode ?? 0) >= 500 && e.code !== 'EAUTH';
+      const via = relay.via === 'smarthost' ? `smarthost ${relay.host}: ` : '';
+      return rcpts.map((address) => ({ address, ok: false, permanent, response: `${via}${e.response ?? e.message}` }));
     }
   }
   let hosts: string[];
