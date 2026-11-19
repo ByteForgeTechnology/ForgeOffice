@@ -2,6 +2,7 @@ import { resolveMx, resolveTxt } from 'node:dns/promises';
 import { Type } from 'typebox';
 import { domains, groups, orm, outboundMessages, quarantine, resources, userAliases, users } from '@forge/db';
 import { dkimDnsRecord, ensureDkimKey, releaseBlob, releaseFromQuarantine } from '@forge/mail';
+import { renameCalendarAddress } from '@forge/calendar';
 import type { AppContext } from '../../context';
 import { badRequest, conflict, notFound } from '../../errors';
 import { authenticate, requirePermission } from '../../plugins/auth';
@@ -111,6 +112,47 @@ export function adminMailRoutes(app: App, ctx: AppContext) {
       await ctx.audit.fromRequest(req, { action: 'user.alias_added', targetType: 'user', targetId: user.id, targetLabel: user.email, metadata: { address } });
       reply.code(201);
       return { alias: row };
+    },
+  );
+
+  app.post(
+    '/api/v1/admin/users/:id/aliases/:aliasId/make-primary',
+    {
+      preHandler: requirePermission(ctx, 'users:manage'),
+      schema: {
+        tags: ['admin: mail'],
+        summary: 'Make an alias the primary address; the old primary address becomes an alias',
+        params: Type.Object({ id: Type.String({ format: 'uuid' }), aliasId: Type.String({ format: 'uuid' }) }),
+      },
+    },
+    async (req) => {
+      const orgId = req.principal!.orgId;
+      const [user] = await db.select().from(users).where(and(eq(users.id, req.params.id), eq(users.orgId, orgId))).limit(1);
+      if (!user) throw notFound('User');
+      if (user.status === 'deleted') throw conflict('Restore this account before changing its address');
+      const [alias] = await db.select().from(userAliases).where(and(eq(userAliases.id, req.params.aliasId), eq(userAliases.userId, user.id))).limit(1);
+      if (!alias) throw notFound('Alias');
+      const at = alias.address.lastIndexOf('@');
+      const [domain] = await db.select().from(domains).where(and(eq(domains.orgId, orgId), eq(domains.name, alias.address.slice(at + 1)))).limit(1);
+      if (!domain) throw badRequest('The alias is not on one of your organisation’s domains');
+      const previous = user.email;
+
+      // Swap in one transaction so the address is never unowned (and never owned twice).
+      const updated = await db.transaction(async (tx) => {
+        await tx.delete(userAliases).where(eq(userAliases.id, alias.id));
+        const [row] = await tx.update(users).set({ email: alias.address, username: alias.address.slice(0, at), domainId: domain.id }).where(eq(users.id, user.id)).returning();
+        await tx.insert(userAliases).values({ userId: user.id, address: previous });
+        return row!;
+      });
+
+      // Their own events now name them by the new address.
+      const events = await renameCalendarAddress(db, user.id, previous, alias.address).catch((err: Error) => {
+        req.log.warn({ err: err.message }, 'could not update calendar addresses');
+        return 0;
+      });
+      await ctx.audit.fromRequest(req, { action: 'user.primary_address_changed', targetType: 'user', targetId: user.id, targetLabel: alias.address, metadata: { from: previous, to: alias.address, calendarEventsUpdated: events } });
+      void ctx.bus?.publish('user.updated', { orgId, userId: user.id, change: 'updated' }).catch(() => {});
+      return { email: updated.email, previous };
     },
   );
 

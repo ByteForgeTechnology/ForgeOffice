@@ -178,7 +178,7 @@ export function UserDetailPage() {
 
         <StorageCard user={user} quota={effectiveQuotaBytes} />
 
-        <AliasesCard userId={user.id} editable={canManage} />
+        <AliasesCard userId={user.id} primary={user.email} self={self} editable={canManage && user.status !== 'deleted'} onPrimaryChanged={invalidate} />
 
         <RolesCard user={user} editable={canRoles} onSaved={invalidate} />
 
@@ -436,10 +436,23 @@ function EditUserDialog({ user, open, onClose, onSaved }: { user: User; open: bo
   );
 }
 
-function AliasesCard({ userId, editable }: { userId: string; editable: boolean }) {
+function AliasesCard({ userId, primary, self, editable, onPrimaryChanged }: { userId: string; primary: string; self: boolean; editable: boolean; onPrimaryChanged: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [address, setAddress] = useState('');
+  const [promoting, setPromoting] = useState<{ id: string; address: string } | null>(null);
+  const makePrimary = useMutation({
+    mutationFn: (id: string) => api<{ email: string; previous: string }>(`/api/v1/admin/users/${userId}/aliases/${id}/make-primary`, { body: {} }),
+    onSuccess: (r) => {
+      setPromoting(null);
+      toast.success(`${r.email} is now the primary address`);
+      void qc.invalidateQueries({ queryKey: ['admin', 'aliases', userId] });
+      void qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      if (self) void qc.invalidateQueries({ queryKey: ['me'] });
+      onPrimaryChanged();
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
   const aliases = useQuery({ queryKey: ['admin', 'aliases', userId], queryFn: () => api<{ items: { id: string; address: string }[] }>(`/api/v1/admin/users/${userId}/aliases`) });
   const add = useMutation({
     mutationFn: () => api(`/api/v1/admin/users/${userId}/aliases`, { body: { address } }),
@@ -457,22 +470,28 @@ function AliasesCard({ userId, editable }: { userId: string; editable: boolean }
     <Card>
       <CardHeader title="Email aliases" description="Extra addresses that deliver to this mailbox and can be sent from." />
       <CardBody className="space-y-3">
-        {aliases.data?.items.length ? (
-          <ul className="space-y-1">
-            {aliases.data.items.map((a) => (
-              <li key={a.id} className="flex items-center justify-between text-sm">
-                <span className="font-mono">{a.address}</span>
-                {editable && (
+        <ul className="space-y-1">
+          <li className="flex min-h-8 items-center gap-2 text-sm">
+            <span className="truncate font-mono">{primary}</span>
+            <Badge tone="brand">Primary</Badge>
+          </li>
+          {aliases.data?.items.map((a) => (
+            <li key={a.id} className="flex min-h-8 items-center gap-2 text-sm">
+              <span className="min-w-0 flex-1 truncate font-mono">{a.address}</span>
+              {editable && (
+                <>
+                  <Button size="sm" variant="ghost" onClick={() => setPromoting(a)}>
+                    Make primary
+                  </Button>
                   <Button size="sm" variant="ghost" aria-label={`Remove ${a.address}`} onClick={() => remove.mutate(a.id)}>
                     <Trash2 className="size-4" />
                   </Button>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm text-zinc-500">No aliases.</p>
-        )}
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+        {!aliases.data?.items.length && <p className="text-sm text-zinc-500">No aliases.</p>}
         {editable && (
           <form
             className="flex gap-2"
@@ -488,6 +507,23 @@ function AliasesCard({ userId, editable }: { userId: string; editable: boolean }
           </form>
         )}
       </CardBody>
+      <ConfirmDialog
+        open={!!promoting}
+        onClose={() => setPromoting(null)}
+        onConfirm={() => promoting && makePrimary.mutate(promoting.id)}
+        title={`Make ${promoting?.address} the primary address?`}
+        confirmLabel="Make primary"
+        busy={makePrimary.isPending}
+      >
+        <div className="space-y-2">
+          <p>
+            <span className="font-mono">{primary}</span> becomes an alias, so mail sent to it still arrives.
+          </p>
+          <p>
+            {self ? 'You' : 'This person'} will sign in with <span className="font-mono">{promoting?.address}</span> from now on: on the web, and in desktop and phone apps for mail, calendar and contacts, which need their account settings updated. New messages are sent from it by default.
+          </p>
+        </div>
+      </ConfirmDialog>
     </Card>
   );
 }

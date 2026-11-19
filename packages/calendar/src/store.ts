@@ -18,7 +18,7 @@ import {
   type Database,
   type Resource,
 } from '@forge/db';
-import { buildReply, describeObject, expandOccurrences, setAttendeePartstat, withMethod, type PartStat } from './ics';
+import { buildReply, describeObject, expandOccurrences, replaceCalendarAddress, setAttendeePartstat, withMethod, type PartStat } from './ics';
 import { parseVCard } from './vcard';
 
 const { and, eq, gt, inArray, isNull, lt, or, sql } = orm;
@@ -184,6 +184,36 @@ export interface PutOptions {
   ifMatch?: string | null;
   /** If-None-Match: "*" means must not exist. */
   ifNoneMatch?: string | null;
+}
+
+/**
+ * After a person's primary address changes, update their own calendars so
+ * events they organise or attend use the new address (others' copies keep
+ * the old one, which still reaches them as an alias). Returns the number of
+ * events changed.
+ */
+export async function renameCalendarAddress(db: Database, userId: string, from: string, to: string): Promise<number> {
+  const owned = await db.select({ id: calendars.id }).from(calendars).where(and(eq(calendars.ownerType, 'user'), eq(calendars.ownerId, userId)));
+  if (!owned.length) return 0;
+  const objects = await db
+    .select()
+    .from(calendarObjects)
+    .where(and(inArray(calendarObjects.calendarId, owned.map((c) => c.id)), isNull(calendarObjects.deletedAt)));
+  let changed = 0;
+  for (const o of objects) {
+    // Unfold first: long ATTENDEE lines may be folded mid-address.
+    if (!o.ics.replace(/\r?\n[ \t]/g, '').toLowerCase().includes(from.toLowerCase())) continue;
+    let next: string | null = null;
+    try {
+      next = replaceCalendarAddress(o.ics, from, to);
+    } catch {
+      continue; // unparseable data is left as it is
+    }
+    if (!next) continue;
+    await putCalendarObject(db, o.calendarId, o.href, next);
+    changed++;
+  }
+  return changed;
 }
 
 /** Create or replace a calendar object (CalDAV PUT semantics). */

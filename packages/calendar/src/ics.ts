@@ -431,3 +431,23 @@ export function mergeAlarms(incoming: string, previous: string | null): string {
   }
   return next.toString() + '\r\n';
 }
+
+/**
+ * Replace one calendar address with another in ORGANIZER and ATTENDEE
+ * properties (e.g. after a person's primary address changes). Returns null
+ * when the address does not appear.
+ */
+export function replaceCalendarAddress(ics: string, from: string, to: string): string | null {
+  const comp = new ICAL.Component(ICAL.parse(ics));
+  const target = `mailto:${from.toLowerCase()}`;
+  let changed = false;
+  for (const sub of comp.getAllSubcomponents()) {
+    for (const prop of [...sub.getAllProperties('organizer'), ...sub.getAllProperties('attendee')]) {
+      if (String(prop.getFirstValue()).toLowerCase() === target) {
+        prop.setValue(`mailto:${to}`);
+        changed = true;
+      }
+    }
+  }
+  return changed ? comp.toString() : null;
+}
