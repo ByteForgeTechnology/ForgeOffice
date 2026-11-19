@@ -57,7 +57,7 @@ export function GroupsPage() {
               {list.data.items.map((g) => (
                 <tr key={g.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                   <Td>
-                    <Link to={`/admin/groups/${g.id}`} className="font-medium text-zinc-900 hover:text-brand dark:text-zinc-100">
+                    <Link to={`/admin/directory/groups/${g.id}`} className="font-medium text-zinc-900 hover:text-brand dark:text-zinc-100">
                       {g.name}
                     </Link>
                     {g.description && <p className="max-w-md truncate text-xs text-zinc-500">{g.description}</p>}
@@ -113,7 +113,7 @@ function CreateGroupDialog({ open, onClose }: { open: boolean; onClose: () => vo
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ['admin', 'groups'] });
       onClose();
-      navigate(`/admin/groups/${r.group.id}`);
+      navigate(`/admin/directory/groups/${r.group.id}`);
     },
     onError: (e) => setError(errorMessage(e)),
   });

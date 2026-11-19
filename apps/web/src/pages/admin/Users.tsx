@@ -81,7 +81,7 @@ export function UsersPage() {
               {list.data?.items.map((u) => (
                 <tr key={u.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                   <Td>
-                    <Link to={`/admin/users/${u.id}`} className="flex items-center gap-3">
+                    <Link to={`/admin/directory/users/${u.id}`} className="flex items-center gap-3">
                       <Avatar name={u.displayName} size="sm" />
                       <span className="min-w-0">
                         <span className="block truncate font-medium text-zinc-900 dark:text-zinc-100">{u.displayName}</span>
@@ -163,7 +163,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
       setError(null);
       onClose();
       if (r.temporaryPassword) setCreated(r);
-      else navigate(`/admin/users/${r.user.id}`);
+      else navigate(`/admin/directory/users/${r.user.id}`);
     },
     onError: (e) => setError(errorMessage(e)),
   });
@@ -277,7 +277,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
         onClose={() => {
           const id = created?.user.id;
           setCreated(null);
-          if (id) navigate(`/admin/users/${id}`);
+          if (id) navigate(`/admin/directory/users/${id}`);
         }}
       />
     </>

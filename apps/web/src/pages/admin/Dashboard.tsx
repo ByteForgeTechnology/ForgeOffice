@@ -325,7 +325,7 @@ function LiveAudit() {
           </span>
         }
         actions={
-          <Link to="/admin/audit" className="text-sm text-brand hover:underline">
+          <Link to="/admin/organisation/audit" className="text-sm text-brand hover:underline">
             Full audit log
           </Link>
         }

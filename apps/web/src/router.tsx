@@ -1,4 +1,4 @@
-import { createBrowserRouter } from 'react-router';
+import { createBrowserRouter, Navigate, useLocation, useParams } from 'react-router';
 import { AdminLayout } from './layouts/AdminLayout';
 import { RequireAuth, Root } from './layouts/Root';
 import { Shell } from './layouts/Shell';
@@ -28,9 +28,35 @@ import { GroupDetailPage } from './pages/admin/GroupDetail';
 import { GroupsPage } from './pages/admin/Groups';
 import { QueuePage } from './pages/admin/Queue';
 import { RolesPage } from './pages/admin/Roles';
-import { SettingsPage } from './pages/admin/Settings';
+import { DirectorySecurityPage, MailOrgSettingsPage, SettingsPage } from './pages/admin/Settings';
 import { UserDetailPage } from './pages/admin/UserDetail';
 import { UsersPage } from './pages/admin/Users';
+
+
+/** Old admin URLs → their new home (":id" is carried over). */
+const LEGACY_ADMIN_PATHS: Record<string, string> = {
+  users: 'directory/users',
+  'users/:id': 'directory/users/:id',
+  groups: 'directory/groups',
+  'groups/:id': 'directory/groups/:id',
+  roles: 'directory/roles',
+  mail: 'mail/flow',
+  'shared-mailboxes': 'mail/shared-mailboxes',
+  'transport-rules': 'mail/transport-rules',
+  'sender-lists': 'mail/sender-lists',
+  signatures: 'mail/signatures',
+  'signatures/:id': 'mail/signatures/:id',
+  resources: 'calendar/rooms',
+  settings: 'organisation/settings',
+  domains: 'organisation/domains',
+  audit: 'organisation/audit',
+};
+
+function LegacyRedirect({ to }: { to: string }) {
+  const { id } = useParams();
+  const { search } = useLocation();
+  return <Navigate to={`/admin/${to.replace(':id', id ?? '')}${search}`} replace />;
+}
 
 export const router = createBrowserRouter([
   {
@@ -60,22 +86,30 @@ export const router = createBrowserRouter([
             element: <AdminLayout />,
             children: [
               { index: true, element: <DashboardPage /> },
-              { path: 'users', element: <UsersPage /> },
-              { path: 'users/:id', element: <UserDetailPage /> },
-              { path: 'groups', element: <GroupsPage /> },
-              { path: 'groups/:id', element: <GroupDetailPage /> },
-              { path: 'domains', element: <DomainsPage /> },
-              { path: 'roles', element: <RolesPage /> },
-              { path: 'settings', element: <SettingsPage /> },
-              { path: 'audit', element: <AuditPage /> },
               { path: 'queues/:name', element: <QueuePage /> },
-              { path: 'mail', element: <MailAdminPage /> },
-              { path: 'resources', element: <ResourcesPage /> },
-              { path: 'shared-mailboxes', element: <SharedMailboxesPage /> },
-              { path: 'transport-rules', element: <TransportRulesPage /> },
-              { path: 'sender-lists', element: <SenderListsPage /> },
-              { path: 'signatures', element: <SignaturesPage /> },
-              { path: 'signatures/:id', element: <SignatureEditorPage /> },
+              // ForgeDirectory
+              { path: 'directory/users', element: <UsersPage /> },
+              { path: 'directory/users/:id', element: <UserDetailPage /> },
+              { path: 'directory/groups', element: <GroupsPage /> },
+              { path: 'directory/groups/:id', element: <GroupDetailPage /> },
+              { path: 'directory/roles', element: <RolesPage /> },
+              { path: 'directory/security', element: <DirectorySecurityPage /> },
+              // ForgeMail
+              { path: 'mail/shared-mailboxes', element: <SharedMailboxesPage /> },
+              { path: 'mail/flow', element: <MailAdminPage /> },
+              { path: 'mail/transport-rules', element: <TransportRulesPage /> },
+              { path: 'mail/sender-lists', element: <SenderListsPage /> },
+              { path: 'mail/signatures', element: <SignaturesPage /> },
+              { path: 'mail/signatures/:id', element: <SignatureEditorPage /> },
+              { path: 'mail/settings', element: <MailOrgSettingsPage /> },
+              // ForgeCalendar
+              { path: 'calendar/rooms', element: <ResourcesPage /> },
+              // Organisation
+              { path: 'organisation/settings', element: <SettingsPage /> },
+              { path: 'organisation/domains', element: <DomainsPage /> },
+              { path: 'organisation/audit', element: <AuditPage /> },
+              // Addresses from before the admin center was grouped by product.
+              ...Object.entries(LEGACY_ADMIN_PATHS).map(([from, to]) => ({ path: from, element: <LegacyRedirect to={to} /> })),
             ],
           },
           { path: '*', element: <NotFoundPage /> },

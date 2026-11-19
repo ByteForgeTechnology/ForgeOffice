@@ -44,7 +44,7 @@ export function GroupDetailPage() {
     onSuccess: () => {
       toast.success('Group deleted');
       void qc.invalidateQueries({ queryKey: ['admin', 'groups'] });
-      navigate('/admin/groups');
+      navigate('/admin/directory/groups');
     },
     onError: (e) => toast.error(errorMessage(e)),
   });
@@ -55,7 +55,7 @@ export function GroupDetailPage() {
 
   return (
     <div className="space-y-6">
-      <Link to="/admin/groups" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
+      <Link to="/admin/directory/groups" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
         <ArrowLeft className="size-4" /> Groups
       </Link>
       <div className="flex flex-wrap items-start justify-between gap-4">

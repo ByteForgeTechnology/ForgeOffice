@@ -116,7 +116,7 @@ export function SignaturesPage() {
         description="Design signatures once and apply them to everyone. Variables such as {{displayName}} are filled from each person's contact details. When several apply to someone, the first one in this list is used."
         actions={
           canManage && (
-            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate('/admin/signatures/new')}>
+            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate('/admin/mail/signatures/new')}>
               New signature
             </Button>
           )
@@ -156,7 +156,7 @@ export function SignaturesPage() {
                     </span>
                   </Td>
                   <Td>
-                    <Link to={`/admin/signatures/${s.id}`} className="font-medium text-zinc-900 hover:underline dark:text-zinc-100">
+                    <Link to={`/admin/mail/signatures/${s.id}`} className="font-medium text-zinc-900 hover:underline dark:text-zinc-100">
                       {s.name}
                     </Link>
                     <span className="mt-1 flex flex-wrap gap-1.5">
@@ -267,7 +267,7 @@ function SignatureEditor({ existing, variables }: { existing: SignatureRow | nul
       void qc.invalidateQueries({ queryKey: ['admin', 'signatures'] });
       void qc.invalidateQueries({ queryKey: ['mail', 'signature'] });
       toast.success('Signature saved');
-      navigate('/admin/signatures');
+      navigate('/admin/mail/signatures');
     },
     onError: (e) => setError(errorMessage(e)),
   });
@@ -276,7 +276,7 @@ function SignatureEditor({ existing, variables }: { existing: SignatureRow | nul
 
   return (
     <div className="space-y-6">
-      <Link to="/admin/signatures" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
+      <Link to="/admin/mail/signatures" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
         <ArrowLeft className="size-4" /> Email signatures
       </Link>
       <PageHeader
@@ -388,7 +388,7 @@ function SignatureEditor({ existing, variables }: { existing: SignatureRow | nul
             </CardBody>
           </Card>
           <Card>
-            <CardHeader title="Variables" description="Filled from each person's contact details (Admin → Users)." />
+            <CardHeader title="Variables" description="Filled from each person's contact details (ForgeDirectory → Users)." />
             <CardBody>
               <ul className="space-y-1 text-sm">
                 {variables.map((v) => (

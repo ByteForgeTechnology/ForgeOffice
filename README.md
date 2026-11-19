@@ -108,7 +108,19 @@ Privilege escalation is blocked in three ways:
 
 **Storage.** All binary data lives on the POSIX filesystem in Docker named volumes; there is no object storage. `@forge/storage` streams writes to a temp file while hashing, fsyncs, then atomically renames to `<root>/ab/cd/<sha256>`, so identical content is stored once. Reference counts live in the `blobs` table. Phase 1 uses it for organisation logos.
 
-**Admin center.** The admin center includes:
+**Admin center.** The sidebar is grouped by product:
+
+| Section | Pages |
+|---|---|
+| Overview | System health, storage, queues, backups |
+| ForgeDirectory | Users, Groups, Roles, Sign-in & security |
+| ForgeMail | Shared mailboxes, Mail flow, Transport rules, Blocked & allowed, Signatures, Mail settings |
+| ForgeCalendar | Rooms & resources |
+| Organisation | Settings (name, branding, storage), Domains, Audit log |
+
+ForgeDrive and ForgeTeam are listed as coming in phases 3 and 4. Each person only sees the pages their roles allow. Old admin addresses (such as `/admin/users/<id>`) redirect to their new place.
+
+The Overview includes:
 
 - Live health of the API, database, Redis and worker (heartbeats), pushed every 5 s.
 - Per-volume filesystem usage (`statfs`) and scanned content size.
@@ -150,7 +162,7 @@ Each outgoing message is processed as follows:
 
 **IMAP.** IMAP4rev1 with LITERAL+, IDLE (push via Redis pub/sub), UIDPLUS, MOVE, SPECIAL-USE, NAMESPACE, STARTTLS and AUTH=PLAIN. It works with Thunderbird, Apple Mail, iOS, Android and Outlook.
 
-**Shared mailboxes.** Admin → Shared mailboxes creates team addresses such as `sales@`. They have their own folders, storage, rules and auto-reply, but no one can sign in to them. Admins grant people or security groups:
+**Shared mailboxes.** Admin → ForgeMail → Shared mailboxes creates team addresses such as `sales@`. They have their own folders, storage, rules and auto-reply, but no one can sign in to them. Admins grant people or security groups:
 
 - **Full access:** read, file, flag, delete, manage folders.
 - **Read only.**
@@ -178,7 +190,7 @@ Shared folders appear in the webmail mailbox switcher as "(shared folders)" and 
 
 **Reminders** are a per-person setting on each calendar: on by default for your own calendars, off for shared and team ones. Phones and desktop apps only receive alarms (VALARM) for calendars where the setting is on. Edits made from a device that can't see the alarms keep everyone else's reminders intact.
 
-**Transport rules.** Admin → Transport rules sets organisation-wide policies for mail in transit. Each rule has conditions (all must match), exceptions (any one skips the rule) and actions:
+**Transport rules.** Admin → ForgeMail → Transport rules sets organisation-wide policies for mail in transit. Each rule has conditions (all must match), exceptions (any one skips the rule) and actions:
 
 - **Conditions:** sender, recipient, location (inside or outside the organisation), group membership, subject or body words, headers, attachments, size and spam score.
 - **Actions:** prefix the subject, set an `X-` header, append a disclaimer, Bcc, redirect, deliver to Junk, quarantine, reject with a message, or silently delete.
@@ -191,14 +203,14 @@ Rules run in the listed order and apply to incoming, outgoing, internal or all m
 
 | Level | Where | Blocked | Allowed |
 |---|---|---|---|
-| Organisation | Admin → Blocked & allowed | Refused at SMTP with a bounce | Skips spam filtering (transport rules still apply) |
+| Organisation | Admin → ForgeMail → Blocked & allowed | Refused at SMTP with a bounce | Skips spam filtering (transport rules still apply) |
 | Mailbox | Mail settings, or *Block sender* / *Always allow* on a message | Delivered to Junk | Never sent to Junk |
 
 The organisation lists apply to mail from outside. A person's block list overrides the organisation's allow list for their mailbox. Allow entries are ignored for mail that fails DMARC, so forged mail can't use them to get past the spam filter. Your own domains can't be on the organisation's allow list. Organisation changes are audited.
 
-**Email signatures.** Admin → Signatures has a visual editor for organisation-wide signatures. It supports fonts, sizes, colours, alignment, links, hosted logo images, and tables for laying out a logo beside text.
+**Email signatures.** Admin → ForgeMail → Signatures has a visual editor for organisation-wide signatures. It supports fonts, sizes, colours, alignment, links, hosted logo images, and tables for laying out a logo beside text.
 
-- **Variables:** `{{displayName}}`, `{{jobTitle}}`, `{{workPhone}}`, `{{website}}` and others are filled from each person's contact details (Admin → Users → Contact details).
+- **Variables:** `{{displayName}}`, `{{jobTitle}}`, `{{workPhone}}`, `{{website}}` and others are filled from each person's contact details (Admin → ForgeDirectory → Users → Contact details).
 - **Empty details:** a line whose variables are all empty for someone is left out, as is a separator such as `|` next to an empty value.
 - **Who gets which signature:** each signature applies to everyone or to chosen groups, and the first match in the list wins.
 - **Where it's added:** each signature can be inserted in new messages, in replies and forwards, or both, in webmail. It can also be appended by the server to mail sent from desktop and phone apps (skipped when the message already contains it).
@@ -208,7 +220,7 @@ The organisation lists apply to mail from outside. A person's block list overrid
 
 **App passwords.** IMAP, SMTP and DAV cannot prompt for a second factor. Once a user has MFA, these protocols only accept app passwords, which the user creates under Account → App passwords.
 
-**DNS.** Admin → Domains → *Mail setup* shows the MX, SPF, DKIM and DMARC records to publish and checks them live.
+**DNS.** Admin → Organisation → Domains → *Mail setup* shows the MX, SPF, DKIM and DMARC records to publish and checks them live.
 
 **Calendars & contacts.**
 

@@ -73,7 +73,7 @@ export function UserDetailPage() {
       setAction(null);
       if (a === 'reset-password') setTempPassword((res as { temporaryPassword: string | null }).temporaryPassword);
       invalidate();
-      if (a === 'delete') navigate('/admin/users');
+      if (a === 'delete') navigate('/admin/directory/users');
     },
     onError: (e) => {
       setAction(null);
@@ -88,7 +88,7 @@ export function UserDetailPage() {
 
   return (
     <div className="space-y-6">
-      <Link to="/admin/users" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
+      <Link to="/admin/directory/users" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
         <ArrowLeft className="size-4" /> Users
       </Link>
       <div className="flex flex-wrap items-center gap-4">
@@ -189,7 +189,7 @@ export function UserDetailPage() {
               <ul className="space-y-2">
                 {groups.map((g) => (
                   <li key={g.id} className="flex items-center justify-between gap-2 text-sm">
-                    <Link to={`/admin/groups/${g.id}`} className="font-medium hover:text-brand">
+                    <Link to={`/admin/directory/groups/${g.id}`} className="font-medium hover:text-brand">
                       {g.name}
                     </Link>
                     <span className="flex gap-1">
