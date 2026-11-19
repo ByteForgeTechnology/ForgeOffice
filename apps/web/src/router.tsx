@@ -12,6 +12,7 @@ import { MailSettingsPage } from './pages/mail/MailSettings';
 import { CalendarPage } from './pages/calendar/Calendar';
 import { ContactsPage } from './pages/contacts/Contacts';
 import { TasksPage } from './pages/tasks/Tasks';
+import { AppDetailPage, AppsPage } from './pages/admin/Apps';
 import { MailAdminPage } from './pages/admin/MailAdmin';
 import { ResourcesPage } from './pages/admin/Resources';
 import { SharedMailboxesPage } from './pages/admin/SharedMailboxes';
@@ -96,6 +97,8 @@ export const router = createBrowserRouter([
               { path: 'directory/groups/:id', element: <GroupDetailPage /> },
               { path: 'directory/roles', element: <RolesPage /> },
               { path: 'directory/security', element: <DirectorySecurityPage /> },
+              { path: 'directory/apps', element: <AppsPage /> },
+              { path: 'directory/apps/:id', element: <AppDetailPage /> },
               // ForgeMail
               { path: 'mail/shared-mailboxes', element: <SharedMailboxesPage /> },
               { path: 'mail/flow', element: <MailAdminPage /> },

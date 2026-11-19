@@ -15,8 +15,11 @@ interface Details {
   stage: Stage;
   email?: string;
   loginHint?: string;
-  client: { id: string; name: string; firstParty: boolean };
+  client: { id: string; name: string; firstParty: boolean; homepage?: string | null; description?: string };
   scopes: string[];
+  permissions?: { scope: string; label: string; description: string }[];
+  /** Set when this person may not use the app. */
+  blocked?: string | null;
 }
 
 interface StepResult {
@@ -137,14 +140,32 @@ export function SignInPage() {
       );
     case 'consent':
       return (
-        <AuthCard title={`${details.data?.client.name} wants to access your account`}>
+        details.data?.blocked ? (
+          <AuthCard title="You can't use this app">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">{details.data.blocked}</p>
+            <Button className="mt-6 w-full" disabled={busy} onClick={() => void step('abort', {})}>
+              Go back
+            </Button>
+          </AuthCard>
+        ) : (
+        <AuthCard title={`${details.data?.client.name} wants to sign you in`}>
           {errorBox}
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">It will be able to:</p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
-            {details.data?.scopes.map((s) => (
-              <li key={s}>{SCOPE_LABELS[s] ?? s}</li>
+          {details.data?.client.homepage && (
+            <p className="mb-3 text-xs text-zinc-500">
+              {new URL(details.data.client.homepage).host}
+              {details.data.client.description && ` · ${details.data.client.description}`}
+            </p>
+          )}
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">It will be able to see:</p>
+          <ul className="mt-2 space-y-2 text-sm">
+            {(details.data?.permissions?.length ? details.data.permissions : (details.data?.scopes ?? []).map((s) => ({ scope: s, label: SCOPE_LABELS[s] ?? s, description: '' }))).map((p) => (
+              <li key={p.scope} className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/60">
+                <span className="font-medium">{p.label}</span>
+                {p.description && <span className="block text-xs text-zinc-500">{p.description}</span>}
+              </li>
             ))}
           </ul>
+          <p className="mt-4 text-xs text-zinc-500">This app is not part of ForgeOffice. It cannot read your mail, files or calendar. You can remove its access at any time in Account settings.</p>
           <div className="mt-6 flex gap-2">
             <Button className="flex-1" disabled={busy} onClick={() => void step('consent', { approve: false })}>
               Deny
@@ -154,6 +175,7 @@ export function SignInPage() {
             </Button>
           </div>
         </AuthCard>
+        )
       );
     default:
       return (

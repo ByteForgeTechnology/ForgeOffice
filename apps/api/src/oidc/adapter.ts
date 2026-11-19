@@ -15,7 +15,7 @@ type Payload = Record<string, unknown> & {
  * One table holds every model type (Session, Grant, AccessToken, ...), keyed
  * by (id, type) with indexed lookup columns for grant/uid/user-code/account.
  */
-export function createOidcAdapter(db: Database) {
+export function createOidcAdapter(db: Database, opts: { findClient?: (clientId: string) => Promise<Record<string, unknown> | undefined> } = {}) {
   return class DrizzleOidcAdapter {
     constructor(private readonly type: string) {}
 
@@ -54,6 +54,8 @@ export function createOidcAdapter(db: Database) {
     }
 
     find(id: string) {
+      // Registered applications live in their own table (managed in the admin center).
+      if (this.type === 'Client') return opts.findClient ? opts.findClient(id) : Promise.resolve(undefined);
       return this.findWhere(eq(oidcPayloads.id, id));
     }
 

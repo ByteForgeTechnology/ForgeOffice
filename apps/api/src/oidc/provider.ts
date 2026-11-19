@@ -1,9 +1,10 @@
 import Provider, { type Configuration, type KoaContextWithOIDC } from 'oidc-provider';
-import { orm, users } from '@forge/db';
+import { groupMembers, groups, oauthApps, orm, users } from '@forge/db';
 import type { AppContext } from '../context';
 import type { OidcClientConfig } from '../config';
 import { getPrimaryOrg, userRoleKeys } from '../services/directory';
 import { createOidcAdapter } from './adapter';
+import { canUseApp, clientMetadata } from '../services/oauth-apps';
 import { escapeHtml, newNonce, renderPage } from './pages';
 
 const { eq } = orm;
@@ -42,7 +43,13 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
   const brandColor = async () => (await getPrimaryOrg(db))?.brandColor;
 
   const configuration: Configuration = {
-    adapter: createOidcAdapter(db) as unknown as Configuration['adapter'],
+    adapter: createOidcAdapter(db, {
+      // Applications registered in the admin center (disabled ones are unknown clients).
+      findClient: async (clientId) => {
+        const [app] = await db.select().from(oauthApps).where(eq(oauthApps.clientId, clientId)).limit(1);
+        return app?.enabled ? clientMetadata(app, ctx.keys.oauthSecretKey) : undefined;
+      },
+    }) as unknown as Configuration['adapter'],
     clients: clients as Configuration['clients'],
     jwks: ctx.signing.privateJwks as Configuration['jwks'],
     cookies: { keys: ctx.keys.cookieKeys },
@@ -56,17 +63,27 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
       openid: ['sub', 'acr', 'amr', 'auth_time', 'sid'],
       email: ['email', 'email_verified'],
       profile: ['name', 'given_name', 'family_name', 'preferred_username', 'zoneinfo', 'locale', 'updated_at'],
+      phone: ['phone_number', 'phone_number_verified'],
+      groups: ['groups'],
       forge: ['org_id', 'roles'],
     },
-    scopes: ['openid', 'offline_access', 'email', 'profile', 'forge'],
+    scopes: ['openid', 'offline_access', 'email', 'profile', 'phone', 'groups', 'forge'],
     // Put profile claims in the ID token: access tokens are audience-bound to
     // the API, so SPAs cannot use them at the userinfo endpoint.
     conformIdTokenClaims: false,
-    pkce: { required: () => true },
+    // PKCE is required for apps without a secret (SPAs, mobile); optional for server-side apps.
+    pkce: { required: (_ctx, client) => client.tokenEndpointAuthMethod === 'none' },
     clientBasedCORS: (_ctx, origin, client) => client.redirectUris?.some((u) => new URL(u).origin === origin) ?? false,
-    async findAccount(_ctx, sub) {
+    async findAccount(kctx, sub) {
       const [user] = await db.select().from(users).where(eq(users.id, sub)).limit(1);
       if (!user || user.status !== 'active' || user.kind === 'shared') return undefined;
+      // Registered apps: checked on every sign-in, token refresh and userinfo call, so taking
+      // someone's access away (or switching the app off) takes effect straight away.
+      const clientId = kctx?.oidc?.client?.clientId;
+      if (clientId && !firstPartyClients.has(clientId)) {
+        const [app] = await db.select().from(oauthApps).where(eq(oauthApps.clientId, clientId)).limit(1);
+        if (!app || !(await canUseApp(db, app, user.id))) return undefined;
+      }
       return {
         accountId: user.id,
         async claims() {
@@ -82,6 +99,9 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
             zoneinfo: user.timezone ?? org?.timezone,
             locale: org?.locale,
             updated_at: Math.floor(user.updatedAt.getTime() / 1000),
+            phone_number: user.workPhone ?? user.mobilePhone ?? undefined,
+            phone_number_verified: user.workPhone || user.mobilePhone ? false : undefined,
+            groups: (await db.select({ name: groups.name }).from(groupMembers).innerJoin(groups, eq(groups.id, groupMembers.groupId)).where(eq(groupMembers.userId, user.id))).map((g) => g.name).sort(),
             org_id: user.orgId,
             roles: await userRoleKeys(db, user.id),
           };
@@ -94,10 +114,12 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
       introspection: { enabled: true },
       resourceIndicators: {
         enabled: true,
-        defaultResource: () => config.apiAudience,
+        // Only ForgeOffice's own apps get tokens for its API. Registered apps get
+        // tokens for sign-in and the userinfo endpoint only.
+        defaultResource: (_ctx, client) => (client && firstPartyClients.has(client.clientId) ? config.apiAudience : undefined),
         useGrantedResource: () => true,
-        getResourceServerInfo: (_ctx, resource) => {
-          if (resource !== config.apiAudience) throw new Error('unknown resource');
+        getResourceServerInfo: (_ctx, resource, client) => {
+          if (resource !== config.apiAudience || !firstPartyClients.has(client.clientId)) throw new Error('unknown resource');
           return {
             scope: API_SCOPE,
             audience: config.apiAudience,
@@ -166,6 +188,18 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
   const provider = new Provider(config.issuer, configuration);
   provider.proxy = config.trustProxy;
   provider.on('server_error', (_ctx: unknown, err: unknown) => log.error({ err }, 'oidc server_error'));
+
+  // Sign-ins to registered apps: audit them and record when each app was last used.
+  provider.on('authorization.success', (kctx: KoaContextWithOIDC) => {
+    const clientId = kctx.oidc.client?.clientId;
+    const accountId = kctx.oidc.session?.accountId;
+    if (!clientId || firstPartyClients.has(clientId) || !accountId) return;
+    void (async () => {
+      const [app] = await db.update(oauthApps).set({ lastUsedAt: new Date() }).where(eq(oauthApps.clientId, clientId)).returning({ name: oauthApps.name });
+      const [u] = await db.select({ email: users.email, orgId: users.orgId }).from(users).where(eq(users.id, accountId));
+      await ctx.audit.record({ action: 'auth.app_sign_in', orgId: u?.orgId, actorId: accountId, actorLabel: u?.email, metadata: { client: clientId, app: app?.name }, ip: kctx.ip, userAgent: kctx.get('user-agent') });
+    })().catch((err) => log.error({ err }, 'could not record app sign-in'));
+  });
 
   provider.on('end_session.success', (kctx: KoaContextWithOIDC) => {
     const accountId = kctx.oidc.session?.accountId;

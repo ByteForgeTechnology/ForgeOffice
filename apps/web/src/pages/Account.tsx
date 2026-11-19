@@ -23,6 +23,7 @@ export function AccountPage() {
       <PasswordCard />
       <MfaCard />
       <AppPasswordsCard />
+      <ConnectedAppsCard />
       <Card>
         <CardHeader title="Appearance" description="Applies to this browser." />
         <CardBody>
@@ -276,6 +277,61 @@ function MfaCard() {
           <Input id="confirm-pw" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
       </Dialog>
+    </Card>
+  );
+}
+
+interface ConnectedApp {
+  clientId: string;
+  name: string;
+  description: string;
+  homepageUrl: string | null;
+  enabled: boolean;
+  since: string | null;
+  permissions: { scope: string; label: string }[];
+}
+
+/** Apps outside ForgeOffice that the person has allowed to sign them in. */
+function ConnectedAppsCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const apps = useQuery({ queryKey: ['me', 'apps'], queryFn: () => api<{ items: ConnectedApp[] }>('/api/v1/me/apps') });
+  const remove = useMutation({
+    mutationFn: (clientId: string) => api(`/api/v1/me/apps/${encodeURIComponent(clientId)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Access removed. The app will ask again next time you use it.');
+      void qc.invalidateQueries({ queryKey: ['me', 'apps'] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <Card>
+      <span id="connected-apps" />
+      <CardHeader title="Connected apps" description="Apps you have signed in to with your ForgeOffice account." />
+      <CardBody>
+        {!apps.data?.items.length ? (
+          <p className="text-sm text-zinc-500">No apps yet.</p>
+        ) : (
+          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {apps.data.items.map((a) => (
+              <li key={a.clientId} className="flex items-start gap-3 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                    {a.name} {!a.enabled && <Badge>Turned off by your administrator</Badge>}
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    {[a.homepageUrl && new URL(a.homepageUrl).host, a.since && `Since ${formatDateTime(a.since)}`].filter(Boolean).join(' · ')}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">Can see: {a.permissions.map((p) => p.label.toLowerCase()).join(', ') || 'your account ID'}</p>
+                </div>
+                <Button size="sm" variant="ghost" loading={remove.isPending && remove.variables === a.clientId} onClick={() => window.confirm(`Remove ${a.name}'s access to your account?`) && remove.mutate(a.clientId)}>
+                  Remove access
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
     </Card>
   );
 }

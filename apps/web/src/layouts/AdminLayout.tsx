@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Outlet, useLocation } from 'react-router';
 import {
   Activity,
+  AppWindow,
   Ban,
   Building2,
   ChevronDown,
@@ -77,6 +78,12 @@ export const ADMIN_NAV: NavSection[] = [
         to: '/admin/directory/security',
         label: 'Sign-in & security',
         icon: ShieldCheck,
+        perm: 'org:read',
+      },
+      {
+        to: '/admin/directory/apps',
+        label: 'App registrations',
+        icon: AppWindow,
         perm: 'org:read',
       },
     ],

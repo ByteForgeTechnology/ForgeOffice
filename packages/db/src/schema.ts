@@ -332,6 +332,55 @@ export type User = typeof users.$inferSelect;
 export type Role = typeof roles.$inferSelect;
 export type Group = typeof groups.$inferSelect;
 export type AuditEntry = typeof auditLog.$inferSelect;
+
+/**
+ * Applications registered by an administrator to sign people in with
+ * ForgeDirectory over OAuth 2.0 / OpenID Connect.
+ */
+export const oauthApps = pgTable(
+  'oauth_apps',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    /** The OAuth client_id given to the application. */
+    clientId: text('client_id').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    homepageUrl: text('homepage_url'),
+    /** "confidential": a server-side app with a secret; "public": SPA or mobile/desktop app (PKCE, no secret). */
+    type: text('type', { enum: ['confidential', 'public'] }).notNull(),
+    /** How a confidential app sends its secret to the token endpoint. */
+    authMethod: text('auth_method', { enum: ['client_secret_basic', 'client_secret_post'] })
+      .notNull()
+      .default('client_secret_basic'),
+    /** AES-GCM encrypted client secret (shown to the admin once). */
+    secretEnc: text('secret_enc'),
+    secretHint: text('secret_hint'),
+    secretCreatedAt: timestamp('secret_created_at', { withTimezone: true }),
+    redirectUris: jsonb('redirect_uris').$type<string[]>().notNull().default([]),
+    postLogoutRedirectUris: jsonb('post_logout_redirect_uris').$type<string[]>().notNull().default([]),
+    /** Scopes the app may ask for (openid, profile, email, phone, groups, offline_access). */
+    scopes: jsonb('scopes').$type<string[]>().notNull().default(['openid', 'profile', 'email']),
+    /** Who may sign in: everyone, or members of `groupIds`. */
+    access: text('access', { enum: ['all', 'groups'] })
+      .notNull()
+      .default('all'),
+    groupIds: jsonb('group_ids').$type<string[]>().notNull().default([]),
+    /** "user": each person is asked to consent; "admin": approved for everyone by an administrator. */
+    consent: text('consent', { enum: ['user', 'admin'] })
+      .notNull()
+      .default('user'),
+    enabled: boolean('enabled').notNull().default(true),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('oauth_apps_client_id_uq').on(t.clientId), index('oauth_apps_org_idx').on(t.orgId)],
+);
+export type OAuthApp = typeof oauthApps.$inferSelect;
 export type Backup = typeof backups.$inferSelect;
 
 /** Case-insensitive column helper for searches. */

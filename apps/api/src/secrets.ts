@@ -36,6 +36,8 @@ export interface DerivedKeys {
   cookieKeys: string[];
   totpKey: Buffer;
   shareLinkKey: Buffer;
+  /** Encrypts OAuth client secrets of registered applications. */
+  oauthSecretKey: Buffer;
 }
 
 export function deriveKeys(secret: string): DerivedKeys {
@@ -43,6 +45,7 @@ export function deriveKeys(secret: string): DerivedKeys {
     cookieKeys: [deriveKey(secret, 'oidc-cookies').toString('base64url')],
     totpKey: deriveKey(secret, 'totp-secrets'),
     shareLinkKey: deriveKey(secret, 'share-links'),
+    oauthSecretKey: deriveKey(secret, 'oauth-client-secrets'),
   };
 }
 

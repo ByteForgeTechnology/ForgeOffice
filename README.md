@@ -218,6 +218,26 @@ The organisation lists apply to mail from outside. A person's block list overrid
 
 **Contact details.** Each person can have a company, office, work and mobile phone, website, postal address and pronouns, set by admins. These details appear in the directory, in the organisation address book on phones and desktop apps (as vCard TEL, ORG, URL and ADR), and in signatures.
 
+**Sign in with ForgeOffice (OAuth 2.0 / OpenID Connect).** Admin → ForgeDirectory → *App registrations* lets other applications (wikis, help desks, Grafana, GitLab, Nextcloud, your own apps) sign people in with their ForgeOffice account.
+
+- **App types:**
+  - **Web apps with a server** get a client ID and a client secret. The secret is shown once, stored encrypted, and can be replaced at any time; it is sent with HTTP Basic or form fields.
+  - **Single-page and mobile apps** are public clients and must use PKCE (S256).
+- **Redirect URIs:** exact matches only. Use https; http is allowed only for localhost, and mobile apps can use reverse-domain schemes such as `com.example.app:/callback`.
+- **What an app can see:** the admin chooses from `openid`, `profile`, `email`, `phone`, `groups` (group names) and `offline_access` (refresh tokens, which need `prompt=consent` as OpenID Connect specifies).
+- **Who can sign in:** everyone, or members of chosen groups. Access is checked on every sign-in, token refresh and userinfo call, so removing someone from a group takes effect immediately.
+- **Consent:** each person approves the app on first use (on a screen showing what it will see), or an admin approves it for everyone.
+- **API access:** apps get ID tokens and userinfo access only. Their access tokens are never accepted by the ForgeOffice API, so an app cannot read people's mail, files or calendars.
+- **Admin controls:** turning an app off, narrowing its scopes, *Sign everyone out* and deleting it all end its existing tokens and consents.
+- **For people:** each person can review and remove apps under Account → *Connected apps*.
+- **Audit:** sign-ins (including refused ones), consents and every registration change are audited.
+
+| Endpoint | Path |
+|---|---|
+| Issuer / discovery | `<public URL>/oidc`, `/oidc/.well-known/openid-configuration` |
+| Authorization, token, userinfo | `/oidc/auth`, `/oidc/token`, `/oidc/me` |
+| Keys, sign-out, revocation | `/oidc/jwks`, `/oidc/session/end`, `/oidc/token/revocation` |
+
 **App passwords.** IMAP, SMTP and DAV cannot prompt for a second factor. Once a user has MFA, these protocols only accept app passwords, which the user creates under Account → App passwords.
 
 **DNS.** Admin → Organisation → Domains → *Mail setup* shows the MX, SPF, DKIM and DMARC records to publish and checks them live.

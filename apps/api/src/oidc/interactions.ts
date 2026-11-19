@@ -21,6 +21,7 @@ import { domains, orm, users, type User } from '@forge/db';
 import type { AppContext } from '../context';
 import { HttpError, badRequest } from '../errors';
 import { getPrimaryOrg } from '../services/directory';
+import { APP_SCOPES, appByClientId, canUseApp } from '../services/oauth-apps';
 import type { App } from '../types';
 import { API_SCOPE, type ForgeProvider } from './provider';
 
@@ -75,23 +76,46 @@ export function interactionRoutes(app: App, ctx: AppContext, forge: ForgeProvide
 
   const meta = (req: FastifyRequest) => ({ ip: req.ip, userAgent: req.headers['user-agent'] ?? null });
 
-  /** Build a grant for a trusted first-party client covering everything it asked for. */
+  /**
+   * Registered (third-party) apps: may this person use it, and has an admin
+   * approved it for everyone? ForgeOffice's own apps are always allowed.
+   */
+  const appGate = async (clientId: string, accountId: string) => {
+    if (firstPartyClients.has(clientId)) return { allowed: true, preApproved: true, name: 'ForgeOffice' };
+    const app = await appByClientId(db, clientId);
+    if (!app) return { allowed: false, preApproved: false, name: clientId };
+    return { allowed: await canUseApp(db, app, accountId), preApproved: app.consent === 'admin', name: app.name };
+  };
+  const notAllowed = (name: string) => new HttpError(403, `You don't have access to ${name}. Ask your administrator to give you access.`, 'app_not_assigned');
+
+  /** Build a grant covering what the client asked for (and is allowed to have). */
   const grantConsent = async (details: Interaction, accountId: string): Promise<string> => {
     const clientId = String(details.params.client_id);
+    const firstParty = firstPartyClients.has(clientId);
     const grant = details.grantId
       ? ((await provider.Grant.find(details.grantId)) ?? new provider.Grant({ accountId, clientId }))
       : new provider.Grant({ accountId, clientId });
     const requested = String(details.params.scope ?? 'openid')
       .split(' ')
       .filter(Boolean);
-    grant.addOIDCScope(requested.filter((s) => s !== API_SCOPE).join(' '));
-    grant.addResourceScope(config.apiAudience, API_SCOPE);
+    if (firstParty) {
+      grant.addOIDCScope(requested.filter((s) => s !== API_SCOPE).join(' '));
+      grant.addResourceScope(config.apiAudience, API_SCOPE);
+    } else {
+      // Registered apps: identity scopes only, never ForgeOffice's internal scopes or API.
+      grant.addOIDCScope(requested.filter((s) => APP_SCOPES.some((x) => x.scope === s)).join(' '));
+    }
     const promptDetails = details.prompt.details as { missingOIDCClaims?: string[] };
     if (promptDetails.missingOIDCClaims?.length) grant.addOIDCClaims(promptDetails.missingOIDCClaims);
     return grant.save();
   };
 
   const complete = async (req: FastifyRequest, reply: FastifyReply, details: Interaction, user: User, amr: string[]) => {
+    const gate = await appGate(String(details.params.client_id), user.id);
+    if (!gate.allowed) {
+      await ctx.audit.record({ action: 'auth.app_sign_in', outcome: 'failure', orgId: user.orgId, actorId: user.id, actorLabel: user.email, metadata: { client: details.params.client_id, app: gate.name, reason: 'not_assigned' }, ...meta(req) });
+      throw notAllowed(gate.name);
+    }
     await db.update(users).set({ lastLoginAt: new Date(), failedLoginCount: 0, lockedUntil: null }).where(eq(users.id, user.id));
     await ctx.audit.record({
       action: 'auth.login',
@@ -104,9 +128,7 @@ export function interactionRoutes(app: App, ctx: AppContext, forge: ForgeProvide
     const result: InteractionResults = {
       login: { accountId: user.id, amr, acr: amr.includes('mfa') ? 'urn:forge:mfa' : 'urn:forge:pwd', remember: true },
     };
-    if (firstPartyClients.has(String(details.params.client_id))) {
-      result.consent = { grantId: await grantConsent(details, user.id) };
-    }
+    if (gate.preApproved) result.consent = { grantId: await grantConsent(details, user.id) };
     const redirectTo = await provider.interactionResult(req.raw, reply.raw, result, { mergeWithLastSubmission: false });
     return { done: true as const, redirectTo };
   };
@@ -147,8 +169,10 @@ export function interactionRoutes(app: App, ctx: AppContext, forge: ForgeProvide
       return serveSpa(reply);
     }
     const accountId = details.session?.accountId;
-    if (details.prompt.name === 'consent' && accountId && firstPartyClients.has(String(details.params.client_id))) {
-      const grantId = await grantConsent(details, accountId);
+    const gate = accountId && details.prompt.name === 'consent' ? await appGate(String(details.params.client_id), accountId) : null;
+    // Already signed in: trusted and admin-approved apps continue straight away.
+    if (gate?.allowed && gate.preApproved) {
+      const grantId = await grantConsent(details, accountId!);
       const redirectTo = await provider.interactionResult(req.raw, reply.raw, { consent: { grantId } }, { mergeWithLastSubmission: true });
       return reply.redirect(redirectTo, 303);
     }
@@ -164,14 +188,22 @@ export function interactionRoutes(app: App, ctx: AppContext, forge: ForgeProvide
       const [u] = await db.select({ email: users.email }).from(users).where(eq(users.id, state.accountId)).limit(1);
       email = u?.email;
     }
+    const firstParty = firstPartyClients.has(String(details.params.client_id));
+    const app = firstParty ? null : await appByClientId(db, String(details.params.client_id));
+    const accountId = details.session?.accountId;
+    const gate = accountId && details.prompt.name === 'consent' ? await appGate(String(details.params.client_id), accountId) : null;
+    const requested = String(details.params.scope ?? '').split(' ').filter(Boolean);
     return {
       uid: details.uid,
       prompt: details.prompt.name,
       stage: state?.stage ?? (details.prompt.name === 'consent' ? 'consent' : 'password'),
       email,
       loginHint: typeof details.params.login_hint === 'string' ? details.params.login_hint : undefined,
-      client: { id: client?.clientId, name: client?.clientName ?? client?.clientId, firstParty: firstPartyClients.has(String(details.params.client_id)) },
-      scopes: String(details.params.scope ?? '').split(' ').filter(Boolean),
+      client: { id: client?.clientId, name: client?.clientName ?? client?.clientId, firstParty, homepage: app?.homepageUrl ?? null, description: app?.description ?? '' },
+      scopes: requested,
+      /** What the app will be able to see, for the consent screen. */
+      permissions: APP_SCOPES.filter((s) => requested.includes(s.scope)).map(({ scope, label, description }) => ({ scope, label, description })),
+      blocked: gate && !gate.allowed ? notAllowed(gate.name).message : null,
     };
   });
 
@@ -340,11 +372,17 @@ export function interactionRoutes(app: App, ctx: AppContext, forge: ForgeProvide
       const details = await loadInteraction(req, reply, req.params.uid);
       const accountId = details.session?.accountId;
       if (details.prompt.name !== 'consent' || !accountId) throw stageError();
+      const gate = await appGate(String(details.params.client_id), accountId);
+      if (!gate.allowed) throw notAllowed(gate.name);
       if (!req.body.approve) {
         const redirectTo = await provider.interactionResult(req.raw, reply.raw, { error: 'access_denied', error_description: 'The user declined access' });
         return { done: true, redirectTo };
       }
       const grantId = await grantConsent(details, accountId);
+      if (!firstPartyClients.has(String(details.params.client_id))) {
+        const [u] = await db.select({ email: users.email, orgId: users.orgId }).from(users).where(eq(users.id, accountId)).limit(1);
+        await ctx.audit.record({ action: 'auth.app_consent', orgId: u?.orgId, actorId: accountId, actorLabel: u?.email, metadata: { client: details.params.client_id, app: gate.name, scopes: String(details.params.scope ?? '') }, ...meta(req) });
+      }
       const redirectTo = await provider.interactionResult(req.raw, reply.raw, { consent: { grantId } }, { mergeWithLastSubmission: true });
       return { done: true, redirectTo };
     },
