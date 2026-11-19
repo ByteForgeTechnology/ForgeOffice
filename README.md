@@ -222,6 +222,34 @@ The organisation lists apply to mail from outside. A person's block list overrid
 
 **DNS.** Admin → Organisation → Domains → *Mail setup* shows the MX, SPF, DKIM and DMARC records to publish and checks them live.
 
+**Tasks.** The Tasks app works like Outlook / Microsoft To Do:
+
+- **Lists:** everyone has a **Tasks** list and a **Flagged email** list, and can add their own. Shared mailboxes have their own lists, visible to their members.
+- **Smart views:** Important, Planned and All tasks.
+- **Task details:** a due date, a reminder, importance, notes, and repeating (daily, weekdays, weekly, monthly, yearly). Completing a repeating task creates the next one.
+
+Flagged email follows the message flag in both directions:
+
+| You do this | This happens |
+|---|---|
+| Flag a message (webmail, any IMAP app, or a mail rule) | A task appears in Flagged email, linked to the message |
+| Unflag the message | The task is marked complete |
+| Flag it again | The same task reopens |
+| Complete or reopen the task (web or a phone task app) | The message is unflagged / flagged |
+| Delete the task | The message is unflagged |
+| Permanently delete the message | The task is removed |
+
+**Assigning tasks** works like Outlook. Pick *Assign to someone* on a task and choose someone in the organisation.
+
+- **The request:** they get a *Task request* email and the task appears under *Assigned to me*, where they accept or decline it.
+- **Who changes what:** the person who assigned the task owns its details (title, notes, due date, importance), and changes are sent to the assignee. The assignee owns the progress (not started, in progress, completed). Each change is reported back as a *Task accepted / in progress / completed* email, and the assigner's copy updates.
+- **Changing your mind:** reassigning, taking a task back, or deleting it cancels the assignee's copy. If the assignee declines or deletes it, the assigner sees *Declined* and can reassign it or do it themselves.
+- **Phones and desktop apps:** this works from task apps over CalDAV too. Completing an assigned task in iOS Reminders reports back the same way.
+- **Under the hood:** the messages are standard iCalendar scheduling for to-dos (iTIP REQUEST / REPLY / CANCEL).
+- **Limits:** assignment is limited to people in the organisation, repeating tasks and flagged email can't be assigned, and each task has one assignee.
+
+Moving the message between folders keeps the link. Task lists are CalDAV collections of VTODOs, so they sync to iOS Reminders, Thunderbird and Android task apps (via DAVx⁵), and reminders fire there.
+
 **Calendars & contacts.**
 
 - **Native apps.** CalDAV and CardDAV are served at `/dav/`, with `/.well-known` discovery. Supported operations: PROPFIND, calendar-query with time ranges, multiget, sync-collection, conditional PUT/DELETE and MKCALENDAR. The organisation directory appears as a read-only address book.

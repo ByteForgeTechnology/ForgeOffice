@@ -876,6 +876,15 @@ export function mailRoutes(app: App, ctx: AppContext) {
     },
   );
 
+  // Where a message lives, for links from tasks (flagged email) into webmail.
+  app.get('/api/v1/mail/messages/:id/location', { schema: { tags: ['mail'], summary: 'Mailbox, folder and conversation of a message', params: IdParams } }, async (req) => {
+    const [m] = await db.select({ userId: messages.userId, mailboxId: messages.mailboxId, threadId: messages.threadId }).from(messages).where(eq(messages.id, req.params.id)).limit(1);
+    if (!m) throw notFound('Message');
+    const fs = await folderScope(mail, userId(req), m.userId);
+    if (!canRead(fs.folders.get(m.mailboxId) ?? 'none')) throw notFound('Message');
+    return { ownerId: m.userId, mailboxId: m.mailboxId, threadId: m.threadId };
+  });
+
   // The organisation signature for the signed-in person, rendered with their contact details.
   app.get('/api/v1/mail/signature', { schema: { tags: ['mail'], summary: 'Your email signature (set by the organisation)' } }, async (req) => {
     const sig = await renderSignatureFor(mail, req.principal!.user);

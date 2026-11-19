@@ -9,6 +9,7 @@ import {
   deleteContact,
   ensureAddressBook,
   ensureDefaultCalendar,
+  ensureTaskLists,
   expandOccurrences,
   InvalidIcsError,
   InvalidVCardError,
@@ -22,8 +23,9 @@ import {
   type CalendarAccess,
 } from '@forge/calendar';
 import { addressBooks, calendarObjects, calendars, contacts, organizations, orm, users, type Calendar, type User } from '@forge/db';
-import { authenticateProtocol } from '@forge/mail';
+import { applyFlagTaskChange, authenticateProtocol } from '@forge/mail';
 import type { AppContext } from '../context';
+import { taskScheduling } from './tasks';
 import type { App } from '../types';
 
 const { and, asc, eq, gt, inArray, isNull, max } = orm;
@@ -116,6 +118,7 @@ const parseSyncToken = (token: string | undefined) => (token?.startsWith(SYNC_PR
 
 export function davRoutes(app: App, ctx: AppContext) {
   const { db } = ctx;
+  const scheduling = taskScheduling(ctx);
   for (const method of ['PROPFIND', 'PROPPATCH', 'REPORT', 'MKCALENDAR', 'MKCOL']) {
     try {
       app.addHttpMethod(method, { hasBody: true });
@@ -181,7 +184,8 @@ export function davRoutes(app: App, ctx: AppContext) {
     'x:calendar-color': xml(c.color),
     'cs:getctag': xml(`"${c.syncRevision}"`),
     'd:sync-token': syncToken(c.syncRevision),
-    'c:supported-calendar-component-set': '<c:comp name="VEVENT"/><c:comp name="VTODO"/>',
+    // Task lists only hold to-dos, so task apps (Reminders, Tasks.org…) show them and calendar apps don't.
+    'c:supported-calendar-component-set': c.kind === 'tasks' ? '<c:comp name="VTODO"/>' : '<c:comp name="VEVENT"/>',
     'd:current-user-privilege-set': privileges(c.access),
     'd:owner': `<d:href>${principalHref(u)}</d:href>`,
     'd:current-user-principal': `<d:href>${principalHref(u)}</d:href>`,
@@ -272,7 +276,9 @@ export function davRoutes(app: App, ctx: AppContext) {
 
   const calendarsHandler = async (req: FastifyRequest, reply: FastifyReply, user: User, rest: string[], depth: string, body: Record<string, unknown>) => {
     await ensureDefaultCalendar(db, user);
-    const visible = (await accessibleCalendars(db, user.id)).filter((c) => c.access !== 'freebusy');
+    await ensureTaskLists(db, user);
+    // Calendars first, then task lists.
+    const visible = (await accessibleCalendars(db, user.id, 'all')).filter((c) => c.access !== 'freebusy').sort((a, b) => Number(a.kind === 'tasks') - Number(b.kind === 'tasks'));
     const home = calHome(user);
     const wanted = requestedProps(body);
 
@@ -294,7 +300,9 @@ export function davRoutes(app: App, ctx: AppContext) {
       const set = JSON.stringify(body);
       const name = /"displayname":"([^"]*)"/.exec(set)?.[1] ?? 'Calendar';
       const color = /"calendar-color":"(#[0-9A-Fa-f]{6})/.exec(set)?.[1] ?? '#0ea5e9';
-      await db.insert(calendars).values({ id: calId, orgId: user.orgId, ownerType: 'user', ownerId: user.id, name, color });
+      // A collection created for VTODO only (e.g. a new list in Reminders) is a task list.
+      const kind = /VTODO/i.test(set) && !/VEVENT/i.test(set) ? 'tasks' : 'events';
+      await db.insert(calendars).values({ id: calId, orgId: user.orgId, ownerType: 'user', ownerId: user.id, name, color, kind });
       return reply.code(201).send();
     }
 
@@ -325,7 +333,7 @@ export function davRoutes(app: App, ctx: AppContext) {
         case 'REPORT':
           return calendarReport(reply, cal, calHref, body, noAlarms);
         case 'DELETE':
-          if (cal.access !== 'owner' || cal.isDefault) return reply.code(403).send();
+          if (cal.access !== 'owner' || cal.isDefault || cal.role) return reply.code(403).send();
           await db.delete(calendars).where(eq(calendars.id, cal.id));
           return reply.code(204).send();
         default:
@@ -356,6 +364,12 @@ export function davRoutes(app: App, ctx: AppContext) {
           const incoming = noAlarms ? mergeAlarms(String(req.body ?? ''), obj?.ics ?? null) : String(req.body ?? '');
           const { object, created } = await putCalendarObject(db, cal.id, href, incoming, { ifMatch, ifNoneMatch });
           void ctx.bus?.publish('calendar.changed', { userIds: [user.id] }).catch(() => {});
+          // Completing a flagged-email task in a task app unflags the message (and reopening flags it again).
+          if (cal.kind === 'tasks' && cal.ownerType === 'user') {
+            await applyFlagTaskChange(ctx.mail, cal.ownerId, object.uid, object.ics).catch((err: Error) => req.log.warn({ err: err.message }, 'flag sync failed'));
+            // Assigned tasks: progress or edits made in a task app reach the other person.
+            await scheduling.afterClientWrite(user, cal, obj?.ics ?? null, object.ics).catch((err: Error) => req.log.warn({ err: err.message }, 'task update not sent'));
+          }
           return reply.code(created ? 201 : 204).header('ETag', variantEtag(object.etag, noAlarms)).send();
         } catch (err) {
           return davError(reply, err);
@@ -364,7 +378,12 @@ export function davRoutes(app: App, ctx: AppContext) {
       case 'DELETE':
         if (!canWrite) return reply.code(403).send();
         try {
-          return reply.code((await deleteCalendarObject(db, cal.id, href, ifMatch)) ? 204 : 404).send();
+          const gone = await deleteCalendarObject(db, cal.id, href, ifMatch);
+          if (gone && obj && cal.kind === 'tasks' && cal.ownerType === 'user') {
+            await applyFlagTaskChange(ctx.mail, cal.ownerId, obj.uid, null).catch((err: Error) => req.log.warn({ err: err.message }, 'flag sync failed'));
+            await scheduling.afterClientWrite(user, cal, obj.ics, null).catch((err: Error) => req.log.warn({ err: err.message }, 'task update not sent'));
+          }
+          return reply.code(gone ? 204 : 404).send();
         } catch (err) {
           return davError(reply, err);
         }

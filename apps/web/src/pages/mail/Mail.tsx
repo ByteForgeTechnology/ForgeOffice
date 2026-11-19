@@ -97,6 +97,30 @@ export function MailPage() {
     setParams(next, { replace: false });
   };
 
+  // Links from tasks (/mail?message=<id>): open the message wherever it is now.
+  const messageLink = params.get('message');
+  useEffect(() => {
+    if (!messageLink || !accounts.data) return;
+    api<{ ownerId: string; mailboxId: string; threadId: string }>(`/api/v1/mail/messages/${messageLink}/location`)
+      .then((loc) => {
+        const next = new URLSearchParams(params);
+        next.delete('message');
+        const owner = accounts.data.items.find((a) => a.id === loc.ownerId);
+        if (owner && owner !== accounts.data.items[0]) next.set('account', owner.id);
+        else next.delete('account');
+        next.set('folder', loc.mailboxId);
+        next.set('thread', loc.threadId);
+        setParams(next, { replace: true });
+      })
+      .catch(() => {
+        toast.error('That message is no longer available');
+        const next = new URLSearchParams(params);
+        next.delete('message');
+        setParams(next, { replace: true });
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageLink, accounts.data]);
+
   // Compose from links such as /mail?compose=1&to=someone@example.com
   useEffect(() => {
     const to = params.get('to');
@@ -132,7 +156,19 @@ export function MailPage() {
 
   const act = useMutation({
     mutationFn: (v: { ids: string[]; action: string; mailboxId?: string }) => api('/api/v1/mail/messages/actions', { body: v, headers }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['mail'] }),
+    onSuccess: (_r, v) => {
+      void qc.invalidateQueries({ queryKey: ['mail'] });
+      void qc.invalidateQueries({ queryKey: ['tasks'] });
+      if (v.action === 'flag')
+        toast.success(
+          <span>
+            Flagged and added to Tasks.{' '}
+            <Link to="/tasks?view=all" className="font-medium underline">
+              Open Tasks
+            </Link>
+          </span>,
+        );
+    },
     onError: (e) => toast.error(errorMessage(e)),
   });
 

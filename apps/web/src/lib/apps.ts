@@ -1,4 +1,4 @@
-import { Calendar, FolderOpen, Home, Mail, MessagesSquare, Settings2, UserCircle2, Users } from 'lucide-react';
+import { Calendar, FolderOpen, Home, ListTodo, Mail, MessagesSquare, Settings2, UserCircle2, Users } from 'lucide-react';
 import type { LauncherApp } from '@forge/ui';
 
 export function launcherApps(isAdmin: boolean): LauncherApp[] {
@@ -6,6 +6,7 @@ export function launcherApps(isAdmin: boolean): LauncherApp[] {
     { id: 'home', name: 'Home', description: 'Your ForgeOffice portal', href: '/', icon: Home, color: 'bg-brand', available: true },
     { id: 'mail', name: 'Mail', description: 'Email with conversations and rules', href: '/mail', icon: Mail, color: 'bg-sky-600', available: true },
     { id: 'calendar', name: 'Calendar', description: 'Meetings, rooms and schedules', href: '/calendar', icon: Calendar, color: 'bg-indigo-600', available: true },
+    { id: 'tasks', name: 'Tasks', description: 'To-dos and flagged email', href: '/tasks', icon: ListTodo, color: 'bg-blue-600', available: true },
     { id: 'people', name: 'People', description: 'Contacts and the organisation directory', href: '/contacts', icon: Users, color: 'bg-teal-600', available: true },
     { id: 'drive', name: 'Drive', description: 'Files, libraries and intranet sites', href: '/apps/drive', icon: FolderOpen, color: 'bg-emerald-600', available: false },
     { id: 'team', name: 'Team', description: 'Chat, channels and meetings', href: '/apps/team', icon: MessagesSquare, color: 'bg-violet-600', available: false },

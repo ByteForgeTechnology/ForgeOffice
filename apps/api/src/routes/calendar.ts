@@ -223,6 +223,7 @@ export function calendarRoutes(app: App, ctx: AppContext) {
     await requireManage(me(req).id, req.params.id);
     const [cal] = await db.select().from(calendars).where(eq(calendars.id, req.params.id)).limit(1);
     if (cal?.isDefault) throw badRequest('Your default calendar cannot be deleted');
+    if (cal?.role) throw badRequest('This list cannot be deleted');
     await db.delete(calendars).where(eq(calendars.id, req.params.id));
     return { ok: true };
   });

@@ -20,6 +20,7 @@ import {
 } from '@forge/db';
 import { buildReply, describeObject, expandOccurrences, replaceCalendarAddress, setAttendeePartstat, withMethod, type PartStat } from './ics';
 import { parseVCard } from './vcard';
+import { applyTaskReply, mergeTaskRequest } from './tasks';
 
 const { and, eq, gt, inArray, isNull, lt, or, sql } = orm;
 
@@ -48,7 +49,7 @@ export async function ensureDefaultCalendar(db: Database, user: { id: string; or
     db
       .select()
       .from(calendars)
-      .where(and(eq(calendars.ownerType, 'user'), eq(calendars.ownerId, user.id), eq(calendars.isDefault, true)))
+      .where(and(eq(calendars.ownerType, 'user'), eq(calendars.ownerId, user.id), eq(calendars.kind, 'events'), eq(calendars.isDefault, true)))
       .limit(1);
   const [existing] = await find();
   if (existing) return existing;
@@ -59,6 +60,26 @@ export async function ensureDefaultCalendar(db: Database, user: { id: string; or
     .onConflictDoNothing();
   const [created] = await find();
   return created!;
+}
+
+/**
+ * A person's (or shared mailbox's) system task lists, created on first use:
+ * "Tasks" (the default list) and "Flagged email" (one task per flagged message).
+ */
+export async function ensureTaskLists(db: Database, owner: { id: string; orgId: string }): Promise<{ tasks: Calendar; flagged: Calendar }> {
+  const find = async () =>
+    db
+      .select()
+      .from(calendars)
+      .where(and(eq(calendars.ownerType, 'user'), eq(calendars.ownerId, owner.id), eq(calendars.kind, 'tasks'), or(eq(calendars.isDefault, true), eq(calendars.role, 'flagged'))));
+  let rows = await find();
+  if (rows.length < 2) {
+    if (!rows.some((r) => r.isDefault)) await db.insert(calendars).values({ orgId: owner.orgId, ownerType: 'user', ownerId: owner.id, kind: 'tasks', name: 'Tasks', isDefault: true, color: '#2563eb' }).onConflictDoNothing();
+    if (!rows.some((r) => r.role === 'flagged'))
+      await db.insert(calendars).values({ orgId: owner.orgId, ownerType: 'user', ownerId: owner.id, kind: 'tasks', role: 'flagged', name: 'Flagged email', color: '#dc2626' }).onConflictDoNothing();
+    rows = await find();
+  }
+  return { tasks: rows.find((r) => r.isDefault)!, flagged: rows.find((r) => r.role === 'flagged')! };
 }
 
 export async function ensureResourceCalendar(db: Database, resource: Resource): Promise<Calendar> {
@@ -132,8 +153,10 @@ export type CalendarAccess = 'owner' | 'write' | 'read' | 'freebusy';
 
 const RANK: Record<CalendarAccess, number> = { freebusy: 0, read: 1, write: 2, owner: 3 };
 
-/** Every calendar a user can see, with their access level. */
-export async function accessibleCalendars(db: Database, userId: string): Promise<(Calendar & { access: CalendarAccess })[]> {
+export type CollectionKind = 'events' | 'tasks' | 'all';
+
+/** Every calendar (or task list) a user can see, with their access level. */
+export async function accessibleCalendars(db: Database, userId: string, kind: CollectionKind = 'events'): Promise<(Calendar & { access: CalendarAccess })[]> {
   const groupIds = (await db.select({ id: groupMembers.groupId }).from(groupMembers).where(eq(groupMembers.userId, userId))).map((g) => g.id);
   const own = await db.select().from(calendars).where(and(eq(calendars.ownerType, 'user'), eq(calendars.ownerId, userId)));
   // Group (team) calendars are writable by members.
@@ -159,15 +182,16 @@ export async function accessibleCalendars(db: Database, userId: string): Promise
   // Shared mailboxes: full access → write, read → read, on all of the mailbox's calendars.
   const delegated = (await delegatedMailboxes(db, userId)).filter((d) => d.access !== 'none');
   for (const d of delegated) {
-    await ensureDefaultCalendar(db, { id: d.ownerId, orgId: d.orgId });
+    if (kind !== 'tasks') await ensureDefaultCalendar(db, { id: d.ownerId, orgId: d.orgId });
+    if (kind !== 'events') await ensureTaskLists(db, { id: d.ownerId, orgId: d.orgId });
     const cals = await db.select().from(calendars).where(and(eq(calendars.ownerType, 'user'), eq(calendars.ownerId, d.ownerId)));
     cals.forEach((c) => add(c, d.access === 'full' ? 'write' : 'read'));
   }
-  return [...map.values()];
+  return [...map.values()].filter((c) => kind === 'all' || c.kind === kind);
 }
 
 export async function calendarAccess(db: Database, userId: string, calendarId: string): Promise<CalendarAccess | null> {
-  return (await accessibleCalendars(db, userId)).find((c) => c.id === calendarId)?.access ?? null;
+  return (await accessibleCalendars(db, userId, 'all')).find((c) => c.id === calendarId)?.access ?? null;
 }
 
 async function bumpCalendarRevision(db: Database, calendarId: string): Promise<number> {
@@ -350,7 +374,7 @@ export async function freeBusy(db: Database, emails: string[], from: Date, to: D
     const own = await db
       .select({ id: calendars.id })
       .from(calendars)
-      .where(and(eq(calendars.ownerType, p.kind), eq(calendars.ownerId, ownerId)));
+      .where(and(eq(calendars.ownerType, p.kind), eq(calendars.ownerId, ownerId), eq(calendars.kind, 'events')));
     const selfEmail = p.kind === 'user' ? p.email : p.resource.email;
     const blocks: BusyBlock[] = [];
     for (const obj of await objectsInRange(db, own.map((c) => c.id), from, to)) {
@@ -396,6 +420,7 @@ export async function processItip(db: Database, recipient: Principal, method: st
   const m = method.toUpperCase();
 
   if (recipient.kind === 'resource') {
+    if (info.componentType === 'VTODO') return { action: 'ignored', affectedUserIds: [] };
     const cal = await ensureResourceCalendar(db, recipient.resource);
     if (m === 'CANCEL') {
       const existing = await findByUid(db, [cal.id], info.uid);
@@ -432,6 +457,30 @@ export async function processItip(db: Database, recipient: Principal, method: st
   }
 
   const user = recipient;
+
+  // Assigned tasks (VTODO): requests land in the assignee's Tasks list; replies update the assigner's copy.
+  if (info.componentType === 'VTODO') {
+    const lists = await ensureTaskLists(db, user);
+    const owned = (await accessibleCalendars(db, user.id, 'tasks')).filter((c) => c.access === 'owner').map((c) => c.id);
+    const existing = await findByUid(db, owned, info.uid);
+    if (m === 'REQUEST') {
+      if (existing && describeObject(existing.ics).sequence > info.sequence) return { action: 'ignored', affectedUserIds: [] };
+      await putCalendarObject(db, existing?.calendarId ?? lists.tasks.id, existing?.href ?? hrefFor(info.uid), mergeTaskRequest(ics, existing?.ics ?? null));
+      return { action: existing ? 'updated' : 'stored', calendarId: existing?.calendarId ?? lists.tasks.id, affectedUserIds: [user.id] };
+    }
+    if (m === 'REPLY') {
+      if (!existing) return { action: 'ignored', affectedUserIds: [] };
+      await putCalendarObject(db, existing.calendarId, existing.href, applyTaskReply(existing.ics, ics));
+      return { action: 'updated', calendarId: existing.calendarId, affectedUserIds: [user.id] };
+    }
+    if (m === 'CANCEL') {
+      if (!existing) return { action: 'ignored', affectedUserIds: [] };
+      await deleteCalendarObject(db, existing.calendarId, existing.href);
+      return { action: 'cancelled', calendarId: existing.calendarId, affectedUserIds: [user.id] };
+    }
+    return { action: 'ignored', affectedUserIds: [] };
+  }
+
   const cal = await ensureDefaultCalendar(db, { id: user.id, orgId: user.orgId });
   const mine = (await accessibleCalendars(db, user.id)).filter((c) => c.access === 'owner').map((c) => c.id);
   const existing = await findByUid(db, mine, info.uid);

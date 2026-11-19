@@ -17,7 +17,7 @@ export function Shell() {
   const isAdmin = (me?.permissions.length ?? 0) > 0;
   const { pathname } = useLocation();
   // Mail and Calendar use the full viewport height with their own panes.
-  const fullBleed = pathname === '/mail' || pathname === '/calendar';
+  const fullBleed = pathname === '/mail' || pathname === '/calendar' || pathname === '/tasks';
 
   return (
     <div className={cn('flex flex-col', fullBleed ? 'h-dvh overflow-hidden' : 'min-h-screen')}>

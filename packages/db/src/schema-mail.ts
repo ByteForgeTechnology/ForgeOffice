@@ -561,14 +561,21 @@ export const calendars = pgTable(
     color: text('color').notNull().default('#4f46e5'),
     timezone: text('timezone').notNull().default('UTC'),
     isDefault: boolean('is_default').notNull().default(false),
+    /** "events" calendars hold VEVENTs; "tasks" lists hold VTODOs (Outlook-style tasks). */
+    kind: text('kind', { enum: ['events', 'tasks'] })
+      .notNull()
+      .default('events'),
+    /** System task list: "flagged" holds a task for each flagged email. */
+    role: text('role', { enum: ['flagged'] }),
     /** Monotonic revision for CalDAV sync tokens / CTag. */
     syncRevision: bigint('sync_revision', { mode: 'number' }).notNull().default(0),
     createdAt: createdAt(),
   },
   (t) => [
     index('calendars_owner_idx').on(t.ownerType, t.ownerId),
-    // Exactly one default calendar per owner (prevents duplicates from concurrent first use).
-    uniqueIndex('calendars_default_uq').on(t.ownerType, t.ownerId).where(sql`${t.isDefault}`),
+    // Exactly one default calendar and one default task list per owner (prevents duplicates from concurrent first use).
+    uniqueIndex('calendars_default_uq').on(t.ownerType, t.ownerId, t.kind).where(sql`${t.isDefault}`),
+    uniqueIndex('calendars_role_uq').on(t.ownerType, t.ownerId, t.role).where(sql`${t.role} is not null`),
   ],
 );
 

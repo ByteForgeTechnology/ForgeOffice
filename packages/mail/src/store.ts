@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { removeFlagTasks, syncFlagTasks } from './flag-tasks';
 import { blobs, mailboxes, messages, orm, organizations, users, type Mailbox, type MailAddress, type Message } from '@forge/db';
 import { notifyMailChanged, type MailContext } from './context';
 import { indexMessage, type IndexedMessage } from './ingest';
@@ -195,6 +196,7 @@ export async function appendMessage(ctx: Pick<MailContext, 'db' | 'blobs' | 'bus
       .returning();
     await ctx.db.update(users).set({ usedBytes: sql`${users.usedBytes} + ${raw.length}` }).where(eq(users.id, opts.userId));
     notifyMailChanged(ctx as MailContext, opts.userId, opts.mailboxId);
+    if (row!.flagged) await syncFlagTasks(ctx as MailContext, [row!]);
     return row!;
   } catch (err) {
     await releaseBlob(ctx, sha256);
@@ -244,6 +246,11 @@ export async function setFlags(ctx: Pick<MailContext, 'db' | 'bus' | 'events'>, 
     }
     notifyMailChanged(ctx as MailContext, userId, mailboxId);
   }
+  // Flag changes create, complete or reopen the message's task.
+  if (change.flagged !== undefined) {
+    const before = new Map(rows.map((r) => [r.id, r.flagged]));
+    await syncFlagTasks(ctx as MailContext, updated.filter((u) => before.get(u.id) !== u.flagged));
+  }
   return updated;
 }
 
@@ -282,15 +289,18 @@ export async function copyMessages(ctx: Pick<MailContext, 'db' | 'blobs' | 'bus'
   const q = await userQuota(ctx, userId);
   if (q.quota > 0 && q.used + total > q.quota) throw new QuotaExceededError();
   const out: { fromUid: number; toUid: number }[] = [];
+  const flaggedCopies: Message[] = [];
   for (const r of rows) {
     const { uid, modseq } = await allocateUid(ctx, targetMailboxId);
     const { id: _id, searchVector: _sv, createdAt: _c, ...rest } = r;
-    await ctx.db.insert(messages).values({ ...rest, mailboxId: targetMailboxId, uid, modseq, deleted: false });
+    const [copy] = await ctx.db.insert(messages).values({ ...rest, mailboxId: targetMailboxId, uid, modseq, deleted: false }).returning();
+    if (copy?.flagged) flaggedCopies.push(copy);
     await ctx.db.update(blobs).set({ refCount: sql`${blobs.refCount} + 1` }).where(eq(blobs.sha256, r.blobSha));
     out.push({ fromUid: r.uid, toUid: uid });
   }
   if (total) await ctx.db.update(users).set({ usedBytes: sql`${users.usedBytes} + ${total}` }).where(eq(users.id, userId));
   if (out.length) notifyMailChanged(ctx as MailContext, userId, targetMailboxId);
+  await syncFlagTasks(ctx as MailContext, flaggedCopies);
   return out;
 }
 
@@ -308,6 +318,7 @@ export async function expungeMessages(ctx: Pick<MailContext, 'db' | 'blobs' | 'b
     await bumpModseq(ctx, box);
     notifyMailChanged(ctx as MailContext, userId, box);
   }
+  await removeFlagTasks(ctx as MailContext, removed);
   return removed;
 }
 

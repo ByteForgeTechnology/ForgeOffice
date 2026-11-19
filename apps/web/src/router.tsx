@@ -11,6 +11,7 @@ import { MailPage } from './pages/mail/Mail';
 import { MailSettingsPage } from './pages/mail/MailSettings';
 import { CalendarPage } from './pages/calendar/Calendar';
 import { ContactsPage } from './pages/contacts/Contacts';
+import { TasksPage } from './pages/tasks/Tasks';
 import { MailAdminPage } from './pages/admin/MailAdmin';
 import { ResourcesPage } from './pages/admin/Resources';
 import { SharedMailboxesPage } from './pages/admin/SharedMailboxes';
@@ -81,6 +82,7 @@ export const router = createBrowserRouter([
           { path: 'mail/settings', element: <MailSettingsPage /> },
           { path: 'calendar', element: <CalendarPage /> },
           { path: 'contacts', element: <ContactsPage /> },
+          { path: 'tasks', element: <TasksPage /> },
           {
             path: 'admin',
             element: <AdminLayout />,
