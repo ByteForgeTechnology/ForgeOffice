@@ -247,6 +247,15 @@ The organisation lists apply to mail from outside. A person's block list overrid
 - **Failures:** if the relay is unreachable or rejects the login, messages are deferred and retried rather than bounced. The error is shown in the delivery queue.
 - **Environment relay:** `FORGE_SMTP_RELAY` still works and is used when the admin smarthost is off, or for domains outside its list.
 
+**Sessions and devices.** Admin → ForgeDirectory → *Sign-in & security* sets two timeouts:
+
+- **Sign in again after:** 8 hours to 90 days; the default is 14 days.
+- **Sign out after inactivity:** never, or 15 minutes to 7 days.
+
+They apply to the web app and to apps using *Sign in with ForgeOffice*. Existing sessions follow a change straight away, because the timeouts are checked when tokens are refreshed, when the API is called, and by the sign-in page, which then asks for the password and second factor again.
+
+Under Account → Security, people see each browser and device they're signed in on: browser, system, IP address, apps used, last activity, and when it must sign in again. They can sign out one device, all other devices, or everywhere. Signing a device out takes effect immediately, because access tokens carry their session ID and the API checks it. Admins can see a person's devices and sign them out everywhere from the user's page; suspending an account does the same. App passwords (for mail, calendar and contacts apps) are managed separately. All of this is audited.
+
 **App passwords.** IMAP, SMTP and DAV cannot prompt for a second factor. Once a user has MFA, these protocols only accept app passwords, which the user creates under Account → App passwords.
 
 **DNS.** Admin → Organisation → Domains → *Mail setup* shows the MX, SPF, DKIM and DMARC records to publish and checks them live.

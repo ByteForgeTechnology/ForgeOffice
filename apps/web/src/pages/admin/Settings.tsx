@@ -288,15 +288,68 @@ function SmarthostCard() {
   );
 }
 
+const SESSION_LENGTHS: [number, string][] = [
+  [8, '8 hours (a working day)'],
+  [24, '1 day'],
+  [72, '3 days'],
+  [168, '7 days'],
+  [336, '14 days (default)'],
+  [720, '30 days'],
+  [2160, '90 days'],
+];
+const IDLE_TIMEOUTS: [number | '', string][] = [
+  ['', 'Never'],
+  [15, '15 minutes'],
+  [30, '30 minutes'],
+  [60, '1 hour'],
+  [240, '4 hours'],
+  [480, '8 hours'],
+  [1440, '1 day'],
+  [10080, '7 days'],
+];
+/** Keep a value set through the API visible even if it isn't one of the presets. */
+const withCurrent = <T extends number | ''>(options: [T, string][], current: T, label: (v: T) => string): [T, string][] =>
+  options.some(([v]) => v === current) ? options : [...options, [current, label(current)]];
+
 /** ForgeDirectory → Sign-in & security. */
 export function DirectorySecurityPage() {
   const { f, set, save } = useOrgForm(
-    (o) => ({ requireMfa: o.requireMfa }),
-    (x) => ({ requireMfa: x.requireMfa }),
+    (o) => ({ requireMfa: o.requireMfa, sessionMaxHours: o.sessionMaxHours, sessionIdleMinutes: o.sessionIdleMinutes }),
+    (x) => ({ requireMfa: x.requireMfa, sessionMaxHours: x.sessionMaxHours, sessionIdleMinutes: x.sessionIdleMinutes }),
   );
   if (!f) return <PageSpinner />;
+  const idleTooLong = !!f.sessionIdleMinutes && f.sessionIdleMinutes > f.sessionMaxHours * 60;
   return (
     <SettingsForm title="Sign-in & security" description="How people sign in to ForgeOffice and to mail, calendar and contacts apps." save={save}>
+      <Card>
+        <CardHeader title="Session timeouts" description="How long people stay signed in to ForgeOffice on the web, and to apps that use “Sign in with ForgeOffice”." />
+        <CardBody className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Sign in again after" htmlFor="s-max" hint="However active they are. Then they enter their password (and code) again.">
+              <Select id="s-max" value={f.sessionMaxHours} onChange={(e) => set('sessionMaxHours', Number(e.target.value))}>
+                {withCurrent(SESSION_LENGTHS, f.sessionMaxHours, (h) => `${h} hours`).map(([v, label]) => (
+                  <option key={v} value={v}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Sign out after inactivity" htmlFor="s-idle" hint="Time without using ForgeOffice before having to sign in again.">
+              <Select id="s-idle" value={f.sessionIdleMinutes ?? ''} onChange={(e) => set('sessionIdleMinutes', e.target.value ? Number(e.target.value) : null)}>
+                {withCurrent(IDLE_TIMEOUTS, f.sessionIdleMinutes ?? '', (m) => `${m} minutes`).map(([v, label]) => (
+                  <option key={v} value={v}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          {idleTooLong && <p className="text-sm text-red-600">The inactivity timeout must be shorter than the session length.</p>}
+          <p className="text-xs text-zinc-500">
+            Changes apply to everyone straight away, including people already signed in. An open ForgeOffice tab counts as activity. Mail, calendar and contacts apps that use app passwords aren't affected. People can see and sign out their devices under Account → Security.
+          </p>
+        </CardBody>
+      </Card>
       <Card>
         <CardHeader title="Two-step verification" />
         <CardBody className="space-y-4">

@@ -239,6 +239,8 @@ export function serializeOrg(org: Organization) {
     locale: org.locale,
     defaultQuotaBytes: org.defaultQuotaBytes,
     requireMfa: org.requireMfa,
+    sessionMaxHours: org.sessionMaxHours,
+    sessionIdleMinutes: org.sessionIdleMinutes,
     brandColor: org.brandColor,
     hasLogo: !!org.logoBlob,
     undoSendSeconds: org.undoSendSeconds,

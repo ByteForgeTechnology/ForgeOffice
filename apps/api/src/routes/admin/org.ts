@@ -5,6 +5,7 @@ import { badRequest, notFound } from '../../errors';
 import { authenticate, requirePermission } from '../../plugins/auth';
 import { decodeImageDataUrl, releaseBlob, retainBlob } from '../../services/assets';
 import { getPrimaryOrg, serializeOrg } from '../../services/directory';
+import { applySessionPolicy } from '../../services/sessions';
 import type { App } from '../../types';
 import { HEX_COLOR, TIMEZONES } from '../public';
 
@@ -38,6 +39,10 @@ export function adminOrgRoutes(app: App, ctx: AppContext) {
           brandColor: Type.Optional(Type.String({ pattern: HEX_COLOR })),
           defaultQuotaBytes: Type.Optional(Type.Integer({ minimum: 0 })),
           requireMfa: Type.Optional(Type.Boolean()),
+          /** Sign in again after (1 hour to 90 days). */
+          sessionMaxHours: Type.Optional(Type.Integer({ minimum: 1, maximum: 90 * 24 })),
+          /** Sign out after inactivity (15 minutes to 30 days), or null for never. */
+          sessionIdleMinutes: Type.Optional(Type.Union([Type.Integer({ minimum: 15, maximum: 30 * 24 * 60 }), Type.Null()])),
           undoSendSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 60 })),
           mailMaxMessageBytes: Type.Optional(Type.Integer({ minimum: 1024 * 1024, maximum: 150 * 1024 * 1024 })),
         }),
@@ -46,12 +51,16 @@ export function adminOrgRoutes(app: App, ctx: AppContext) {
     async (req) => {
       const current = await org();
       if (req.body.timezone && !TIMEZONES.has(req.body.timezone)) throw badRequest('Unknown timezone');
+      const maxHours = req.body.sessionMaxHours ?? current.sessionMaxHours;
+      const idle = req.body.sessionIdleMinutes === undefined ? current.sessionIdleMinutes : req.body.sessionIdleMinutes;
+      if (idle && idle > maxHours * 60) throw badRequest('The inactivity timeout must be shorter than the session length');
       const [updated] = await db.update(organizations).set(req.body).where(eq(organizations.id, current.id)).returning();
       const changes = Object.fromEntries(
         Object.keys(req.body).map((k) => [k, { from: current[k as keyof typeof current], to: updated![k as keyof typeof updated] }]),
       );
       await ctx.audit.fromRequest(req, { action: 'org.updated', targetType: 'organization', targetId: current.id, targetLabel: updated!.name, metadata: { changes } });
       void ctx.bus?.publish('org.updated', { orgId: current.id }).catch(() => {});
+      applySessionPolicy(updated!);
       return { org: serializeOrg(updated!) };
     },
   );

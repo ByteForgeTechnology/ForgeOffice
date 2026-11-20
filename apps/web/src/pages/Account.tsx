@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { KeyRound, ShieldCheck, ShieldOff, Trash2 } from 'lucide-react';
+import { KeyRound, LogOut, ShieldCheck, ShieldOff, Trash2 } from 'lucide-react';
 import { Alert, Avatar, Badge, Button, Card, CardBody, CardHeader, Dialog, Field, Input, PageHeader, PageSpinner, Select, ThemeSwitcher, formatDateTime, useToast } from '@forge/ui';
 import { RecoveryCodes } from '../components/AuthCard';
 import { api, errorMessage } from '../lib/api';
 import { useMe } from '../lib/hooks';
+import { useAuth } from '../lib/auth';
+import { DeviceList, type DeviceSession } from '../components/Devices';
 import type { Enrollment } from '../lib/types';
 import { EnrollForm } from './SignIn';
 
@@ -22,6 +24,7 @@ export function AccountPage() {
       <ProfileCard />
       <PasswordCard />
       <MfaCard />
+      <DevicesCard />
       <AppPasswordsCard />
       <ConnectedAppsCard />
       <Card>
@@ -277,6 +280,53 @@ function MfaCard() {
           <Input id="confirm-pw" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
       </Dialog>
+    </Card>
+  );
+}
+
+/** Where you're signed in: sign out one device, all others, or everywhere. */
+function DevicesCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const { signOut } = useAuth();
+  const sessions = useQuery({ queryKey: ['me', 'sessions'], queryFn: () => api<{ items: DeviceSession[] }>('/api/v1/me/sessions') });
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['me', 'sessions'] });
+  const one = useMutation({
+    mutationFn: (id: string) => api<{ current: boolean }>(`/api/v1/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: (r) => (r.current ? void signOut() : (toast.success('Signed out of that device'), refresh())),
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const many = useMutation({
+    mutationFn: (includeThisDevice: boolean) => api<{ signedOut: number }>('/api/v1/me/sessions/revoke', { body: { includeThisDevice } }),
+    onSuccess: (r, all) => {
+      if (all) return void signOut();
+      toast.success(r.signedOut ? `Signed out of ${r.signedOut} other ${r.signedOut === 1 ? 'device' : 'devices'}` : 'No other devices were signed in');
+      refresh();
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const items = sessions.data?.items ?? [];
+  const others = items.filter((s) => !s.current).length;
+  return (
+    <Card>
+      <div id="devices" className="scroll-mt-20" />
+      <CardHeader title="Where you're signed in" description="Browsers and devices signed in to ForgeOffice, and apps that use “Sign in with ForgeOffice”." />
+      <CardBody className="space-y-4">
+        {sessions.isLoading ? (
+          <PageSpinner />
+        ) : (
+          <DeviceList items={items} busyId={one.isPending ? one.variables : null} onSignOut={(s) => window.confirm(s.current ? 'Sign out of this device?' : `Sign out of ${s.browser} on ${s.os}?`) && one.mutate(s.id)} />
+        )}
+        <div className="flex flex-wrap gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <Button icon={<LogOut className="size-4" />} disabled={!others} loading={many.isPending && many.variables === false} onClick={() => window.confirm('Sign out of every other browser and device?') && many.mutate(false)}>
+            Sign out of all other devices
+          </Button>
+          <Button variant="danger" loading={many.isPending && many.variables === true} onClick={() => window.confirm('Sign out everywhere, including here?') && many.mutate(true)}>
+            Sign out everywhere
+          </Button>
+        </div>
+        <p className="text-xs text-zinc-500">Mail, calendar and contacts apps that use an app password stay connected. Remove their app passwords below to disconnect them.</p>
+      </CardBody>
     </Card>
   );
 }

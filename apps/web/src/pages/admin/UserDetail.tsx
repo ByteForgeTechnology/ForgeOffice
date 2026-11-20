@@ -22,6 +22,7 @@ import {
   useToast,
 } from '@forge/ui';
 import { ConfirmDialog, TemporaryPasswordDialog, UserStatusBadge } from '../../components/admin';
+import { DeviceList, type DeviceSession } from '../../components/Devices';
 import { api, errorMessage } from '../../lib/api';
 import { useCan, useMe } from '../../lib/hooks';
 import { CONTACT_FIELDS, type ContactKey, type Role, type User } from '../../lib/types';
@@ -174,6 +175,8 @@ export function UserDetailPage() {
           </CardBody>
         </Card>
 
+        <UserDevicesCard userId={user.id} editable={canManage && !self && user.status === 'active'} />
+
         <ContactCard user={user} onEdit={canManage && user.status !== 'deleted' ? () => setEditing(true) : undefined} />
 
         <StorageCard user={user} quota={effectiveQuotaBytes} />
@@ -231,6 +234,37 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <span className="text-zinc-500">{label}</span>
       <span className="text-right">{children}</span>
     </div>
+  );
+}
+
+function UserDevicesCard({ userId, editable }: { userId: string; editable: boolean }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const sessions = useQuery({ queryKey: ['admin', 'user-sessions', userId], queryFn: () => api<{ items: DeviceSession[] }>(`/api/v1/admin/users/${userId}/sessions`) });
+  const revoke = useMutation({
+    mutationFn: () => api<{ signedOut: number }>(`/api/v1/admin/users/${userId}/sessions/revoke`, { body: {} }),
+    onSuccess: (r) => {
+      toast.success(r.signedOut ? `Signed out of ${r.signedOut} ${r.signedOut === 1 ? 'device' : 'devices'}` : 'Not signed in anywhere');
+      void qc.invalidateQueries({ queryKey: ['admin', 'user-sessions', userId] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <Card>
+      <CardHeader
+        title="Signed-in devices"
+        description="Browsers and devices this person is signed in on."
+        actions={
+          editable &&
+          !!sessions.data?.items.length && (
+            <Button size="sm" variant="ghost" loading={revoke.isPending} onClick={() => window.confirm('Sign this person out of every browser and device? Apps using app passwords stay connected.') && revoke.mutate()}>
+              Sign out everywhere
+            </Button>
+          )
+        }
+      />
+      <CardBody>{sessions.isLoading ? null : <DeviceList items={sessions.data?.items ?? []} />}</CardBody>
+    </Card>
   );
 }
 

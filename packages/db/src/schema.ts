@@ -37,6 +37,10 @@ export const organizations = pgTable('organizations', {
   defaultQuotaBytes: bigint('default_quota_bytes', { mode: 'number' }).notNull().default(50 * 1024 ** 3),
   /** When true every user must enrol TOTP MFA at next sign-in. */
   requireMfa: boolean('require_mfa').notNull().default(false),
+  /** Sign in again after this many hours, however active (web app and "Sign in with ForgeOffice" apps). */
+  sessionMaxHours: integer('session_max_hours').notNull().default(336),
+  /** Sign out after this many minutes without activity; null = never. */
+  sessionIdleMinutes: integer('session_idle_minutes'),
   /** Largest message accepted by SMTP and the composer. */
   mailMaxMessageBytes: integer('mail_max_message_bytes').notNull().default(35 * 1024 * 1024),
   /** Seconds a sent message is held so the user can undo it. */
@@ -348,6 +352,31 @@ export type User = typeof users.$inferSelect;
 export type Role = typeof roles.$inferSelect;
 export type Group = typeof groups.$inferSelect;
 export type AuditEntry = typeof auditLog.$inferSelect;
+
+/**
+ * Signed-in sessions (one per browser or device), keyed by the identity
+ * provider's session id. Used to show "where you're signed in", to enforce
+ * session timeouts, and to sign a device out.
+ */
+export const userSessions = pgTable(
+  'user_sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    loginAt: timestamp('login_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+    /** OAuth client IDs used in this session (ForgeOffice, registered apps). */
+    clients: jsonb('clients').$type<string[]>().notNull().default([]),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('user_sessions_user_idx').on(t.userId, t.lastSeenAt)],
+);
+export type UserSession = typeof userSessions.$inferSelect;
 
 /**
  * Applications registered by an administrator to sign people in with

@@ -1,4 +1,4 @@
-import { oidcPayloads, orm, type Database } from '@forge/db';
+import { oidcPayloads, orm, userSessions, type Database } from '@forge/db';
 
 const { and, eq, isNull, lt, or, gt } = orm;
 
@@ -92,6 +92,8 @@ export async function revokeAccount(db: Database, accountId: string): Promise<vo
     .where(eq(oidcPayloads.accountId, accountId));
   await db.delete(oidcPayloads).where(eq(oidcPayloads.accountId, accountId));
   for (const { grantId } of grants) if (grantId) await db.delete(oidcPayloads).where(eq(oidcPayloads.grantId, grantId));
+  // Access tokens already issued stop working at the API too.
+  await db.update(userSessions).set({ revokedAt: new Date() }).where(and(eq(userSessions.userId, accountId), isNull(userSessions.revokedAt)));
 }
 
 export async function purgeExpiredOidc(db: Database): Promise<number> {

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { loadSessionPolicy, startSessionPolicyRefresh } from './services/sessions';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyBaseLogger } from 'fastify';
@@ -80,6 +81,8 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
     mail,
   };
 
+  await loadSessionPolicy(dbHandle.db);
+  startSessionPolicyRefresh(dbHandle.db, logger);
   const forge = createProvider(ctx, logger);
   const app = await buildApp(ctx, forge, { logger });
   let realtime: ReturnType<typeof attachRealtime> | null = null;

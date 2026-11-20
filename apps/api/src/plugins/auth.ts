@@ -3,6 +3,7 @@ import { bearerToken, hasPermission, resolvePermissions, type Permission } from 
 import { orm, roles, userRoles, users, type User } from '@forge/db';
 import type { AppContext } from '../context';
 import { forbidden, unauthorized } from '../errors';
+import { findSession, sessionProblem, touchSession } from '../services/sessions';
 
 const { eq } = orm;
 
@@ -13,6 +14,8 @@ export interface Principal {
   roleKeys: string[];
   clientId?: string;
   scopes: string[];
+  /** The sign-in session (browser or device) the request comes from. */
+  sessionId?: string;
 }
 
 declare module 'fastify' {
@@ -47,6 +50,15 @@ export function authenticate(ctx: AppContext): preHandlerAsyncHookHandler {
     } catch {
       throw unauthorized('Invalid or expired access token');
     }
+    // Access tokens name their sign-in session: a signed-out, timed-out or idle session stops working at once.
+    if (typeof claims.sid === 'string') {
+      const session = await findSession(ctx.db, claims.sid);
+      if (session && session.userId === claims.sub) {
+        const problem = sessionProblem(session);
+        if (problem) throw unauthorized(problem === 'idle' ? 'Signed out after a period of inactivity' : problem === 'expired' ? 'Your session has ended. Please sign in again.' : 'This device has been signed out');
+        await touchSession(ctx.db, session);
+      }
+    }
     const data = await loadPrincipalData(ctx, claims.sub);
     if (!data || data.user.status !== 'active' || data.user.kind === 'shared') throw unauthorized('Account is not active');
     req.principal = {
@@ -56,6 +68,7 @@ export function authenticate(ctx: AppContext): preHandlerAsyncHookHandler {
       roleKeys: data.roleKeys,
       clientId: claims.client_id,
       scopes: typeof claims.scope === 'string' ? claims.scope.split(' ') : [],
+      sessionId: typeof claims.sid === 'string' ? claims.sid : undefined,
     };
   };
 }

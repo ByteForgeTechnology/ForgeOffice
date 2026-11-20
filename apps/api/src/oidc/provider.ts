@@ -1,10 +1,11 @@
-import Provider, { type Configuration, type KoaContextWithOIDC } from 'oidc-provider';
+import Provider, { interactionPolicy, type Configuration, type KoaContextWithOIDC } from 'oidc-provider';
 import { groupMembers, groups, oauthApps, orm, users } from '@forge/db';
 import type { AppContext } from '../context';
 import type { OidcClientConfig } from '../config';
 import { getPrimaryOrg, userRoleKeys } from '../services/directory';
 import { createOidcAdapter } from './adapter';
 import { canUseApp, clientMetadata } from '../services/oauth-apps';
+import { findSession, recordSessionUse, remainingSeconds, sessionPolicy, sessionProblem, touchSession } from '../services/sessions';
 import { escapeHtml, newNonce, renderPage } from './pages';
 
 const { eq } = orm;
@@ -74,9 +75,18 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
     // PKCE is required for apps without a secret (SPAs, mobile); optional for server-side apps.
     pkce: { required: (_ctx, client) => client.tokenEndpointAuthMethod === 'none' },
     clientBasedCORS: (_ctx, origin, client) => client.redirectUris?.some((u) => new URL(u).origin === origin) ?? false,
-    async findAccount(kctx, sub) {
+    async findAccount(kctx, sub, token) {
       const [user] = await db.select().from(users).where(eq(users.id, sub)).limit(1);
       if (!user || user.status !== 'active' || user.kind === 'shared') return undefined;
+      // Tokens from a session that was signed out, timed out or idle are refused (token refresh, userinfo).
+      const sessionUid = (token as { sessionUid?: string } | undefined)?.sessionUid;
+      if (sessionUid) {
+        const row = await findSession(db, sessionUid);
+        if (row && row.userId === user.id) {
+          if (sessionProblem(row)) return undefined;
+          await touchSession(db, row);
+        }
+      }
       // Registered apps: checked on every sign-in, token refresh and userinfo call, so taking
       // someone's access away (or switching the app off) takes effect straight away.
       const clientId = kctx?.oidc?.client?.clientId;
@@ -172,15 +182,25 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
       kctx.type = 'html';
       kctx.body = html;
     },
-    interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}` },
+    interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}`, policy: signInPolicy(db) },
+    // The web app's access tokens name their session, so signing a device out stops them at the API at once.
+    extraTokenClaims: (_ctx, token) => {
+      const sid = (token as { sessionUid?: string }).sessionUid;
+      return sid ? { sid } : undefined;
+    },
     ttl: {
       AccessToken: 15 * 60,
       AuthorizationCode: 60,
       IdToken: 60 * 60,
       Interaction: 60 * 60,
-      Session: 14 * 24 * 3600,
-      Grant: 14 * 24 * 3600,
-      RefreshToken: 14 * 24 * 3600,
+      // Session timeouts (Admin → ForgeDirectory → Sign-in & security).
+      Session: (_ctx, session) => remainingSeconds(session.loginTs),
+      Grant: () => sessionPolicy().maxSeconds,
+      RefreshToken: (_ctx, token) => {
+        const p = sessionPolicy();
+        const left = remainingSeconds((token as { iiat?: number }).iiat);
+        return p.idleSeconds ? Math.max(60, Math.min(left, p.idleSeconds)) : left;
+      },
     },
     rotateRefreshToken: true,
   };
@@ -192,7 +212,11 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
   // Sign-ins to registered apps: audit them and record when each app was last used.
   provider.on('authorization.success', (kctx: KoaContextWithOIDC) => {
     const clientId = kctx.oidc.client?.clientId;
-    const accountId = kctx.oidc.session?.accountId;
+    const session = kctx.oidc.session;
+    const accountId = session?.accountId;
+    // Every browser/device session, for "where you're signed in" and session timeouts.
+    if (clientId && accountId && session?.uid)
+      void recordSessionUse(db, { id: session.uid, userId: accountId, loginTs: session.loginTs ?? Math.floor(Date.now() / 1000), ip: kctx.ip ?? null, userAgent: kctx.get('user-agent') || null, clientId }).catch((err) => log.error({ err }, 'could not record session'));
     if (!clientId || firstPartyClients.has(clientId) || !accountId) return;
     void (async () => {
       const [app] = await db.update(oauthApps).set({ lastUsedAt: new Date() }).where(eq(oauthApps.clientId, clientId)).returning({ name: oauthApps.name });
@@ -221,4 +245,26 @@ export function createProvider(ctx: AppContext, log: { error: (o: unknown, m?: s
   });
 
   return { provider, firstPartyClients };
+}
+
+/**
+ * Sign-in policy: the standard checks, plus ForgeOffice's session rules. A
+ * browser session that was signed out, has passed the maximum session length,
+ * or has been idle too long must sign in again (password and second factor).
+ */
+function signInPolicy(db: AppContext['db']) {
+  const policy = interactionPolicy.base();
+  policy.get('login')!.checks.add(
+    new interactionPolicy.Check('forge_session', 'Session timed out or was signed out', async (kctx) => {
+      const session = kctx.oidc.session;
+      if (!session?.accountId || !session.uid) return interactionPolicy.Check.NO_NEED_TO_PROMPT;
+      const row = await findSession(db, session.uid);
+      // A sign-in newer than the record (just signed in again) starts afresh.
+      const freshLogin = !!session.loginTs && row && session.loginTs * 1000 > row.loginAt.getTime();
+      if (row && !freshLogin && row.userId === session.accountId && sessionProblem(row)) return interactionPolicy.Check.REQUEST_PROMPT;
+      if (session.loginTs && Date.now() / 1000 - session.loginTs > sessionPolicy().maxSeconds) return interactionPolicy.Check.REQUEST_PROMPT;
+      return interactionPolicy.Check.NO_NEED_TO_PROMPT;
+    }),
+  );
+  return policy;
 }

@@ -1,6 +1,6 @@
 import type { Job } from 'bullmq';
 import type { Redis } from 'ioredis';
-import { auditLog, messages, oidcPayloads, orm, transportRuleHits, users, type Database } from '@forge/db';
+import { auditLog, messages, oidcPayloads, orm, transportRuleHits, userSessions, users, type Database } from '@forge/db';
 import { expungeMessages, type MailContext } from '@forge/mail';
 import { VOLUME_SCAN_KEY, type JobData, type JobName, type VolumeScan } from '@forge/events';
 import { directorySize } from '@forge/storage';
@@ -47,6 +47,8 @@ export function createMaintenanceProcessor(db: Database, redis: Redis, config: W
           .returning({ id: auditLog.id });
         // The transport-rule match log is a short-lived trace: keep 30 days.
         await db.delete(transportRuleHits).where(lt(transportRuleHits.createdAt, new Date(Date.now() - 30 * 86_400_000)));
+        // Session records: kept a while after sign-out or last use (longest session is 90 days).
+        await db.delete(userSessions).where(lt(userSessions.lastSeenAt, new Date(Date.now() - 120 * 86_400_000)));
         return { pruned: rows.length };
       }
       case 'prune-backups':

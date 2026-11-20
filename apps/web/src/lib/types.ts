@@ -46,6 +46,8 @@ export interface Org {
   locale: string;
   defaultQuotaBytes: number;
   requireMfa: boolean;
+  sessionMaxHours: number;
+  sessionIdleMinutes: number | null;
   brandColor: string;
   hasLogo: boolean;
   setupCompletedAt: string | null;

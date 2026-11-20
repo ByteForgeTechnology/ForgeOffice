@@ -1,4 +1,6 @@
 import { randomInt } from 'node:crypto';
+import { listSessions } from '../sessions';
+import { revokeSessions } from '../../services/sessions';
 import { Type } from 'typebox';
 import { GLOBAL_ADMIN, canGrant, checkPasswordPolicy, hashPassword, resolvePermissions } from '@forge/auth';
 import { groupMembers, groups, orm, roles, userRoles, users, type User } from '@forge/db';
@@ -234,6 +236,28 @@ export function adminUserRoutes(app: App, ctx: AppContext) {
       await ctx.audit.fromRequest(req, { action: 'user.updated', targetType: 'user', targetId: target.id, targetLabel: target.email, metadata: { fields: Object.keys(req.body) } });
       void publish(p.orgId, target.id, 'updated');
       return { user: serializeUser(user!, { roles: await userRoleKeys(db, target.id) }) };
+    },
+  );
+
+  app.get(
+    '/api/v1/admin/users/:id/sessions',
+    { preHandler: requirePermission(ctx, 'users:read'), schema: { tags: ['admin: users'], summary: 'Browsers and devices the user is signed in on', params: IdParams } },
+    async (req) => {
+      const target = await loadTarget(req.principal!, req.params.id);
+      return { items: await listSessions(db, target.id) };
+    },
+  );
+
+  app.post(
+    '/api/v1/admin/users/:id/sessions/revoke',
+    { preHandler: requirePermission(ctx, 'users:manage'), schema: { tags: ['admin: users'], summary: 'Sign the user out of every browser and device', params: IdParams } },
+    async (req) => {
+      const p = req.principal!;
+      const target = await loadTarget(p, req.params.id);
+      await assertCanManage(p, target);
+      const n = await revokeSessions(db, target.id);
+      await ctx.audit.fromRequest(req, { action: 'auth.sessions_revoked', targetType: 'user', targetId: target.id, targetLabel: target.email, metadata: { sessions: n, byAdmin: true } });
+      return { signedOut: n };
     },
   );
 
