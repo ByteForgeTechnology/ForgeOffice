@@ -20,7 +20,7 @@ export function Shell() {
   const features = useFeatures();
   const { pathname } = useLocation();
   // Mail and Calendar use the full viewport height with their own panes.
-  const fullBleed = pathname === '/mail' || pathname === '/calendar' || pathname === '/tasks';
+  const fullBleed = pathname === '/mail' || pathname === '/calendar' || pathname === '/tasks' || pathname === '/drive';
 
   return (
     <div className={cn('flex flex-col', fullBleed ? 'h-dvh overflow-hidden' : 'min-h-screen')}>
@@ -65,7 +65,7 @@ function FeatureGate() {
   const { pathname } = useLocation();
   const features = useFeatures();
   const app = appForPath(pathname);
-  const feature = app === 'contacts' ? 'contacts' : app === 'mail' || app === 'calendar' || app === 'tasks' ? app : null;
+  const feature = app === 'drive' || app === 'sites' ? 'drive' : app === 'contacts' ? 'contacts' : app === 'mail' || app === 'calendar' || app === 'tasks' ? app : null;
   if (feature && !features[feature]) return <FeatureOff feature={feature} />;
   return <Outlet />;
 }

@@ -434,7 +434,13 @@ const PRODUCTS: { feature: Feature | null; name: string; icon: LucideIcon; summa
     summary: 'To-do lists, flagged email and assigned tasks, in the web app and in task apps on devices.',
     whenOff: ['The Tasks app and task-list sync are unavailable.', 'Flagging an email keeps the flag but no longer creates a task.'],
   },
-  { feature: null, name: 'ForgeDrive', icon: FolderOpen, summary: 'Files, libraries and intranet sites.', comingSoon: 'phase 3' },
+  {
+    feature: 'drive',
+    name: 'ForgeDrive',
+    icon: FolderOpen,
+    summary: 'Files and folders, team libraries, sharing and version history, plus ForgeSites (intranet sites, wikis and news).',
+    whenOff: ['The Drive and Sites apps are hidden and their files cannot be opened.', 'External sharing links stop working.'],
+  },
   { feature: null, name: 'ForgeTeam', icon: MessagesSquare, summary: 'Chat, channels and meetings.', comingSoon: 'phase 4' },
 ];
 

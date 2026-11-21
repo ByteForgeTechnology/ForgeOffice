@@ -4,8 +4,9 @@ Self-hosted, subscription-free productivity suite. Built so far:
 
 - **Phase 1 – Foundation, Identity & Unified Shell:** monorepo, OIDC identity provider, users/groups/RBAC, audit log, web portal and admin center.
 - **Phase 2 – ForgeMail:** SMTP and IMAP servers written in Node.js, webmail, server-side rules, auto-replies, quarantine, calendars and contacts with CalDAV/CardDAV, meeting rooms and free/busy.
+- **Phase 3 – ForgeDrive & ForgeSites:** file libraries with resumable uploads, de-duplicated storage, versions, a recycle bin, inherited permissions, sharing links, check-out, previews, full-text search, optional virus scanning (ClamAV) and Office editing (Euro-Office); intranet sites with pages, news and widgets.
 
-Drive and Team (phases 3–4) plug into this foundation.
+Team (phase 4) plugs into this foundation.
 
 ## Quick start (Docker)
 
@@ -26,15 +27,20 @@ ForgeOffice runs as one container per component, all from one image. Browsers, p
 | `contacts-web` | 8084 | Web: contacts |
 | `tasks-web` | 8085 | Web: tasks |
 | `admin-web` | 8086 | Web: admin center |
+| `drive-web` | 8087 | Web: ForgeDrive, and the pages behind sharing links |
+| `sites-web` | 8088 | Web: ForgeSites |
 | `directory` | 8091 | ForgeDirectory: sign-in (OpenID Connect), users, groups, roles, organisation, audit, real-time updates; applies database migrations |
 | `mail-api` | 8092 | ForgeMail back end: webmail API, mail admin (transport rules, signatures, smarthost…) |
 | `calendar-api` | 8093 | Calendars, scheduling, CalDAV |
 | `contacts-api` | 8094 | Contacts, CardDAV |
 | `tasks-api` | 8095 | Tasks |
 | `mail-store` | 8096 | Mailbox storage: the only container that mounts `forge_mail_data` |
+| `drive-api` | 8097 | ForgeDrive and ForgeSites back end: files, versions, permissions, links, search, WOPI for Office editing |
 | `smtp` | 25, 587, 465 | Receiving mail and submission from mail apps |
 | `imap` | 143, 993 | Mail apps (IMAP) |
-| `worker` | – | Outgoing delivery queue, backups, maintenance |
+| `worker` | – | Outgoing delivery queue, virus scans and previews of Drive files, backups, maintenance |
+| `clamav` *(profile `av`)* | – | Optional virus scanning of Drive uploads |
+| `office` *(profile `office`)* | 9980 | Optional Euro-Office Document Server, for editing Office documents in the browser |
 | `db`, `redis` | – | PostgreSQL (shared by the services) and Redis (queues, events, heartbeats) |
 
 The web, back-end and storage ports are published on `127.0.0.1` only. Set `FORGE_SERVICE_BIND=0.0.0.0` to expose them, but browsers should always go through the gateway: it keeps sign-in and the apps on one origin. SMTP and IMAP are published on all interfaces from their own containers. SMTP, IMAP, the webmail back end and the worker store and read messages through `mail-store`, using a service token derived from the master secret. The worker also mounts the mailbox volume read-only, for backups and usage scans.
@@ -42,6 +48,8 @@ The web, back-end and storage ports are published on `127.0.0.1` only. Set `FORG
 `docker/gateway/Caddyfile` is generated from the routes each service registers, and a test fails if it is out of date. Regenerate it with `UPDATE_GATEWAY=1 pnpm --filter @forge/api test gateway`. The same image still runs everything in one process (`FORGE_SERVICES=all`, the default), which is used in development and tests.
 
 Open `FORGE_PUBLIC_URL`, enter the setup token, and complete the wizard (organisation, domain, branding, policies, first administrator). The token is single-use; it is also stored in the `forge_certs` volume as `setup-token` until setup completes.
+
+**Optional Drive extras.** For virus scanning, set `FORGE_CLAMAV=clamav:3310` in `.env` and start with `docker compose --profile av up -d` (ClamAV needs about 1.5 GB of memory). For Office editing, set `FORGE_OFFICE_URL` to an address browsers can reach (`http://localhost:9980` on one machine) and start with `--profile office`. Also set `FORGE_OFFICE_JWT_SECRET` (`openssl rand -hex 32`), which the document server and drive-api share to sign the editor config and save callbacks. Euro-Office fetches and saves files by calling `drive-api` directly (`FORGE_WOPI_URL`, default `http://drive-api:8097`), and drive-api reaches it at `http://office` (`FORGE_OFFICE_INTERNAL_URL`). It needs 2–4 GB of memory. Collabora Online works too, over WOPI (`FORGE_OFFICE_PROTOCOL=wopi`). Admin → ForgeDrive → Settings shows whether each is working.
 
 For HTTPS with automatic Let's Encrypt certificates, set `FORGE_DOMAIN` and `FORGE_PUBLIC_URL=https://<domain>` and run `docker compose --profile tls up -d`. Caddy terminates TLS in front of the gateway.
 
@@ -87,11 +95,11 @@ In development the browser only talks to Vite, which proxies `/api`, `/oidc`, `/
 
 ```
 apps/
-  api/        Fastify back-end services (FORGE_SERVICES=directory|mail|calendar|contacts|tasks|all), oidc-provider, Socket.IO, CalDAV/CardDAV; gateway generator
-  worker/     BullMQ worker: outbound mail delivery, backups, scheduled maintenance
+  api/        Fastify back-end services (FORGE_SERVICES=directory|mail|calendar|contacts|tasks|drive|all), oidc-provider, Socket.IO, CalDAV/CardDAV; gateway generator
+  worker/     BullMQ worker: outbound mail delivery, virus scans, thumbnails, backups, scheduled maintenance
   mailserver/ SMTP (25/587/465) and IMAP (143/993) listeners (FORGE_MAIL_ROLE=smtp|imap)
   mailstore/  Mailbox storage service (content-addressed raw messages over authenticated HTTP)
-  web/      React + Vite + Tailwind web apps (portal, mail, calendar, contacts, tasks, admin), built one bundle per app; serve.mjs serves one app per container
+  web/      React + Vite + Tailwind web apps (portal, mail, calendar, contacts, tasks, drive, sites, admin), built one bundle per app; serve.mjs serves one app per container
 packages/
   db/       Drizzle schema, migrations, Postgres/PGlite connection
   auth/     RBAC permissions & roles, argon2id, TOTP + recovery codes, JWT verification
@@ -99,6 +107,7 @@ packages/
   events/   Typed BullMQ queues, Redis pub/sub event bus, service heartbeats
   mail/     Mail engine: MIME parsing, mailbox store, delivery, rules, spam, DKIM, IMAP & SMTP servers
   calendar/ iCalendar/vCard handling, calendar & contact storage, iTIP scheduling, free/busy
+  drive/    Drive engine: libraries, items, versions, ACL, uploads, locks, tokens, ClamAV, previews and PDF text
   ui/       Shared React components (buttons, dialogs, tables, app launcher, theming)
 docker/     Dockerfile, gateway/Caddyfile (generated) and the optional TLS Caddyfile
 ```
@@ -329,6 +338,21 @@ Moving the message between folders keeps the link. Task lists are CalDAV collect
 - **Rooms.** Rooms accept automatically when free and decline double bookings.
 - **Calendar views.** The web calendar has day, week and month views, recurrence, team calendars for groups, and a scheduling assistant showing free/busy. Events can carry a ForgeTeam meeting link, which becomes live in Phase 4.
 
+### ForgeDrive
+
+- **Storage.** Files are streamed to `forge_drive_data` and stored once per SHA-256, whoever uploads them. Each upload or save creates an immutable version that points at a blob; blobs are reference-counted and removed when the last version goes. Thumbnails (480 px WebP, made with sharp) live in `.previews/`, partial uploads in `.uploads/`.
+- **Uploads and downloads.** Uploads go in 8 MB chunks (`POST /api/v1/drive/uploads`, then `PATCH` with `Upload-Offset`); after a dropped connection the client asks how much arrived and carries on. Downloads support HTTP Range, so video seeks and large downloads resume. File URLs are short-lived signed tokens, so `<img>` and `<video>` work without exposing a session.
+- **Processing.** Each new version goes to the `virus-scan` queue (ClamAV over `INSTREAM`), then `thumbnails`, which also extracts text from PDFs (pdf.js) and text files for search. Infected files can't be downloaded, shared or previewed. Without ClamAV, files are marked "not scanned".
+- **Permissions.** Each person has a library; security groups and sites each get one too. Roles are Owner, Editor, Commenter and Viewer. Group owners own their group's library and members edit it. Grants on a folder apply to everything inside, unless a folder stops inheriting. Whoever owns a library always keeps access to it.
+- **Versions and the recycle bin.** You can restore or delete any earlier version; restoring makes it the newest version and keeps the history. Deleted items go to the recycle bin with their folder structure. They are purged after the organisation's retention period (93 days by default) by the `purge-drive-trash` job.
+- **Sharing links.** Links are signed JWTs. They can be view-only or allow downloads, and can have a password, an expiry date and a download limit. Admins can turn off public links or cap how long they last. Links open at `/drive/s/<token>` without signing in.
+- **Check-out.** Check-out and the Office editor's locks are held in Redis, so two people can't save over each other. Checking in can add a comment or discard changes.
+- **Office editing.** With Euro-Office set up, Drive's **New** menu creates Word, Excel and PowerPoint files, and Office files open in the browser. ForgeDrive uses the ONLYOFFICE Docs API that Euro-Office speaks natively. The browser loads the editor with a config signed with the shared secret. Everyone who opens the same version edits it together in real time. Shortly after the last person closes it, the document server posts to `/api/v1/drive/office/callback/…` and the edited file becomes a new version, saved as the last person who edited it and is still allowed to. Viewers, commenters, files checked out by someone else, and formats Euro-Office can't save back (such as .doc) open read-only. With Collabora Online (`FORGE_OFFICE_PROTOCOL=wopi`), ForgeDrive is a WOPI host instead: CheckFileInfo, GetFile, PutFile and locks.
+
+### ForgeSites
+
+Sites are intranet pages for a team or the whole organisation. Each site has its own document library, which also controls who can see and edit the site. Pages are edited with a block editor (TipTap) that can embed widgets: the site's latest news, its documents, recent activity, a team calendar and images from the library. News posts can be saved as drafts and then published; the Sites home page combines the news from every site you can see. Sites can also hold **lists** (as in SharePoint): structured data with typed columns (text, multiple lines, number, choice, date, yes/no, person, hyperlink), created blank or from the Tasks, Issue tracker, Contacts or Events templates. Lists can be sorted, filtered and exported to CSV, and placed on pages as a widget. Everyone who can see the site can read its lists, and its members can change them. A list holds up to 5,000 items.
+
 ### Docker volumes
 
 | Volume | Mounted at | Contents |
@@ -336,9 +360,11 @@ Moving the message between folders keeps the link. Task lists are CalDAV collect
 | `forge_db_data` | postgres | Database files |
 | `forge_redis_data` | redis | AOF persistence, BullMQ state |
 | `forge_mail_data` | `/data/mail` | Message blobs (content-addressed .eml), composer uploads |
-| `forge_drive_data` | `/data/drive` | Blobs: logos now, Drive files in phase 3 |
+| `forge_drive_data` | `/data/drive` | Drive files (by SHA-256), previews, partial uploads, logos, signature images |
 | `forge_team_media` | `/data/team` | Team media (phase 4) |
 | `forge_certs` | `/data/certs` | OIDC signing keys, master secret, setup token, DKIM keys, TLS certificates |
+| `forge_clamav_db` | clamav | ClamAV signature database (profile `av`) |
+| `forge_office_data` | office | Euro-Office settings and generated secrets (profile `office`) |
 | `forge_mdm_data` | — | Reserved for Phase 6 (ForgeManage) |
 | `forge_backups` | `/data/backups` | Backup snapshots |
 
@@ -354,6 +380,8 @@ OpenAPI documentation is served at `/api/docs`. Main route groups:
 - `/api/v1/admin/{users,groups,domains,roles,org,audit,system,resources,mail}`: admin center
 - `/api/v1/mail`: folders, conversations, search, send/undo/schedule, drafts, uploads, rules, auto-reply
 - `/api/v1/calendar`, `/api/v1/contacts`, `/api/v1/directory/gal`: calendars, events, RSVP, free/busy, rooms, contacts, Global Address List
+- `/api/v1/drive`: libraries, items, uploads, versions, permissions, links, comments, activity, search; `/api/v1/share/<token>` for sharing links; `/api/v1/drive/office/callback` and `/wopi/files` for the Office editor
+- `/api/v1/sites`: sites, pages and news; `/api/v1/admin/drive`: Drive policies and library storage
 - `/dav/`: CalDAV and CardDAV (HTTP Basic with an app password)
 
 ## Not yet implemented
@@ -361,8 +389,13 @@ OpenAPI documentation is served at `/api/docs`. Main route groups:
 Mail and calendar:
 
 - Server-side CalDAV scheduling (RFC 6638). Native calendar apps send invitations themselves over SMTP, which works with ForgeMail.
-- Virus scanning of attachments (the `virus-scan` queue arrives with Phase 3's ClamAV worker).
+- Virus scanning of mail attachments (Drive uploads are scanned; mail is not yet).
 - IMAP CONDSTORE/QRESYNC, and import/export of existing mailboxes (EML/MBOX import is part of `forge-cli` in Phase 5).
+
+Drive:
+
+- A desktop sync client and WebDAV access to libraries.
+- Thumbnails of Office documents and videos (images get thumbnails; PDFs and text files are indexed for search), and OCR of scanned PDFs.
 
 Platform:
 

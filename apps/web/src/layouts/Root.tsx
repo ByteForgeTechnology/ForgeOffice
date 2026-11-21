@@ -4,7 +4,7 @@ import { PageSpinner } from '@forge/ui';
 import { useAuth } from '../lib/auth';
 import { useApplyBranding } from '../lib/hooks';
 
-const PUBLIC_PATHS = ['/setup', '/interaction/', '/auth/callback', '/signed-out'];
+const PUBLIC_PATHS = ['/setup', '/interaction/', '/auth/callback', '/signed-out', '/drive/s/'];
 
 /** Applies branding and sends a fresh installation to the setup wizard. */
 export function Root() {

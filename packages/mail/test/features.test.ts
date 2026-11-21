@@ -11,7 +11,7 @@ let h: Harness;
 let alice: Awaited<ReturnType<Harness['createUser']>>;
 
 const set = async (features: Partial<FeatureFlags>) => {
-  await h.handle.db.update(organizations).set({ features: { mail: true, calendar: true, contacts: true, tasks: true, ...features } }).where(eq(organizations.id, h.orgId));
+  await h.handle.db.update(organizations).set({ features: { mail: true, calendar: true, contacts: true, tasks: true, drive: true, ...features } }).where(eq(organizations.id, h.orgId));
   resetFeatureCache();
 };
 const external = () => createTransport({ host: '127.0.0.1', port: h.ports.smtp, secure: false, ignoreTLS: true } as never);

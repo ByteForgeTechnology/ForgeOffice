@@ -27,8 +27,18 @@ const updatedAt = () =>
 // Organizations & domains
 // ---------------------------------------------------------------------------
 
-export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks';
+export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks' | 'drive';
 export type FeatureFlags = Record<Feature, boolean>;
+export interface DriveSettings {
+  /** Days items stay in recycle bins before they are deleted for good. */
+  trashDays: number;
+  maxUploadMb: number;
+  /** Allow links that work for people outside the organisation. */
+  externalSharing: boolean;
+  /** Longest an external link may last (days); null = no limit. */
+  linkMaxDays: number | null;
+}
+export const DEFAULT_DRIVE_SETTINGS: DriveSettings = { trashDays: 93, maxUploadMb: 10240, externalSharing: true, linkMaxDays: null };
 
 export const organizations = pgTable('organizations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -45,7 +55,9 @@ export const organizations = pgTable('organizations', {
   /** Sign out after this many minutes without activity; null = never. */
   sessionIdleMinutes: integer('session_idle_minutes'),
   /** Optional products switched on for the organisation (ForgeDirectory is always on). */
-  features: jsonb('features').$type<FeatureFlags>().notNull().default({ mail: true, calendar: true, contacts: true, tasks: true }),
+  /** ForgeDrive policies (Admin → ForgeDrive → Settings). */
+  driveSettings: jsonb('drive_settings').$type<DriveSettings>().notNull().default({ trashDays: 93, maxUploadMb: 10240, externalSharing: true, linkMaxDays: null }),
+  features: jsonb('features').$type<FeatureFlags>().notNull().default({ mail: true, calendar: true, contacts: true, tasks: true, drive: true }),
   /** Largest message accepted by SMTP and the composer. */
   mailMaxMessageBytes: integer('mail_max_message_bytes').notNull().default(35 * 1024 * 1024),
   /** Seconds a sent message is held so the user can undo it. */

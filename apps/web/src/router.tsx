@@ -9,7 +9,7 @@ import { appForPath, servesPath, WEB_APP } from './lib/web-app';
 /*
  * Each web app is its own bundle, served by its own container (see
  * docker-compose.yml): portal (home, account, sign-in), mail, calendar,
- * contacts, tasks and admin. __FORGE_APP__ is replaced at build time, so the
+ * contacts, tasks, drive, sites and admin. __FORGE_APP__ is replaced at build time, so the
  * conditions below are constant and the other apps' pages are left out of
  * the bundle. Development and all-in-one builds ("all") include everything.
  */
@@ -66,6 +66,9 @@ const publicRoutes: RouteObject[] =
       ]
     : [];
 
+// Shared links open without signing in, in the drive app.
+const drivePublic: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'drive' ? [{ path: '/drive/s/:token', lazy: page(() => import('./pages/drive/Share'), 'SharePage') }] : [];
+
 const portal: RouteObject[] =
   __FORGE_APP__ === 'all' || __FORGE_APP__ === 'portal'
     ? [
@@ -87,6 +90,24 @@ const mail: RouteObject[] =
 const calendar: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'calendar' ? [{ path: 'calendar', lazy: page(() => import('./pages/calendar/Calendar'), 'CalendarPage') }] : [];
 const contacts: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'contacts' ? [{ path: 'contacts', lazy: page(() => import('./pages/contacts/Contacts'), 'ContactsPage') }] : [];
 const tasks: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'tasks' ? [{ path: 'tasks', lazy: page(() => import('./pages/tasks/Tasks'), 'TasksPage') }] : [];
+
+const drive: RouteObject[] =
+  __FORGE_APP__ === 'all' || __FORGE_APP__ === 'drive'
+    ? [
+        { path: 'drive', lazy: page(() => import('./pages/drive/Drive'), 'DrivePage') },
+        { path: 'drive/edit/:id', lazy: page(() => import('./pages/drive/Office'), 'OfficePage') },
+      ]
+    : [];
+
+const sites: RouteObject[] =
+  __FORGE_APP__ === 'all' || __FORGE_APP__ === 'sites'
+    ? [
+        { path: 'sites', lazy: page(() => import('./pages/sites/Sites'), 'SitesPage') },
+        { path: 'sites/:slug', lazy: page(() => import('./pages/sites/Sites'), 'SitePage') },
+        { path: 'sites/:slug/:page', lazy: page(() => import('./pages/sites/Sites'), 'SitePage') },
+        { path: 'sites/:slug/lists/:listId', lazy: page(() => import('./pages/sites/Sites'), 'SitePage') },
+      ]
+    : [];
 
 const admin: RouteObject[] =
   __FORGE_APP__ === 'all' || __FORGE_APP__ === 'admin'
@@ -116,6 +137,9 @@ const admin: RouteObject[] =
             { path: 'mail/settings', lazy: page(() => import('./pages/admin/Settings'), 'MailOrgSettingsPage') },
             // ForgeCalendar
             { path: 'calendar/rooms', lazy: page(() => import('./pages/admin/Resources'), 'ResourcesPage') },
+            // ForgeDrive
+            { path: 'drive/settings', lazy: page(() => import('./pages/admin/DriveAdmin'), 'DriveSettingsPage') },
+            { path: 'drive/libraries', lazy: page(() => import('./pages/admin/DriveAdmin'), 'DriveLibrariesPage') },
             // Organisation
             { path: 'organisation/settings', lazy: page(() => import('./pages/admin/Settings'), 'SettingsPage') },
             { path: 'organisation/features', lazy: page(() => import('./pages/admin/Settings'), 'FeaturesPage') },
@@ -129,7 +153,10 @@ const admin: RouteObject[] =
     : [];
 
 /** Paths outside the shell that this bundle doesn't serve (e.g. /signed-out in the mail app). */
-const elsewhere: RouteObject[] = WEB_APP === 'all' || WEB_APP === 'portal' ? [] : [{ path: '/setup' }, { path: '/interaction/:uid' }, { path: '/auth/callback' }, { path: '/signed-out' }].map((r) => ({ ...r, element: <OtherAppOrNotFound /> }));
+const elsewhere: RouteObject[] = [
+  ...(WEB_APP === 'all' || WEB_APP === 'portal' ? [] : [{ path: '/setup' }, { path: '/interaction/:uid' }, { path: '/auth/callback' }, { path: '/signed-out' }]),
+  ...(WEB_APP === 'all' || WEB_APP === 'drive' ? [] : [{ path: '/drive/s/:token' }]),
+].map((r) => ({ ...r, element: <OtherAppOrNotFound /> }));
 
 export const router = createBrowserRouter([
   {
@@ -137,6 +164,7 @@ export const router = createBrowserRouter([
     hydrateFallbackElement: <PageSpinner />,
     children: [
       ...publicRoutes,
+      ...drivePublic,
       ...elsewhere,
       {
         element: (
@@ -150,6 +178,8 @@ export const router = createBrowserRouter([
           ...calendar,
           ...contacts,
           ...tasks,
+          ...drive,
+          ...sites,
           ...admin,
           // The home page lives in the portal app.
           ...(WEB_APP !== 'all' && WEB_APP !== 'portal' ? [{ index: true, element: <OtherAppOrNotFound /> }] : []),

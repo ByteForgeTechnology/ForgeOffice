@@ -2,8 +2,8 @@ import { asc } from 'drizzle-orm';
 import type { Database } from './client';
 import { organizations, type Feature, type FeatureFlags } from './schema';
 
-export const FEATURES: Feature[] = ['mail', 'calendar', 'contacts', 'tasks'];
-export const ALL_FEATURES_ON: FeatureFlags = { mail: true, calendar: true, contacts: true, tasks: true };
+export const FEATURES: Feature[] = ['mail', 'calendar', 'contacts', 'tasks', 'drive'];
+export const ALL_FEATURES_ON: FeatureFlags = { mail: true, calendar: true, contacts: true, tasks: true, drive: true };
 
 let cached: { at: number; flags: FeatureFlags } | null = null;
 const TTL_MS = 5_000;
@@ -30,7 +30,7 @@ export function resetFeatureCache() {
   cached = null;
 }
 
-export const FEATURE_NAMES: Record<Feature, string> = { mail: 'ForgeMail', calendar: 'ForgeCalendar', contacts: 'ForgeContacts', tasks: 'ForgeTasks' };
+export const FEATURE_NAMES: Record<Feature, string> = { mail: 'ForgeMail', calendar: 'ForgeCalendar', contacts: 'ForgeContacts', tasks: 'ForgeTasks', drive: 'ForgeDrive' };
 
 export class FeatureDisabledError extends Error {
   constructor(readonly feature: Feature) {

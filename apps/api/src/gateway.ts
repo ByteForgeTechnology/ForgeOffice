@@ -14,6 +14,8 @@ export const WEB_APPS = [
   { app: 'contacts', prefix: '/contacts', host: 'contacts-web', port: 8084 },
   { app: 'tasks', prefix: '/tasks', host: 'tasks-web', port: 8085 },
   { app: 'admin', prefix: '/admin', host: 'admin-web', port: 8086 },
+  { app: 'drive', prefix: '/drive', host: 'drive-web', port: 8087 },
+  { app: 'sites', prefix: '/sites', host: 'sites-web', port: 8088 },
 ] as const;
 /** Everything else (home, account, sign-in pages, shared assets) is the portal. */
 export const PORTAL = { app: 'portal', host: 'portal-web', port: 8081 } as const;
@@ -24,6 +26,7 @@ export const SERVICE_HOSTS: Record<ServiceName, string> = {
   calendar: 'calendar-api',
   contacts: 'contacts-api',
   tasks: 'tasks-api',
+  drive: 'drive-api',
 };
 
 /** Routes outside the services' route tables. */

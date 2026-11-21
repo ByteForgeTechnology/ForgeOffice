@@ -33,7 +33,8 @@
     "oidc-provider": "^9.15.0",
     "pino": "^10.4.0",
     "socket.io": "^4.8.4",
-    "typebox": "^1.4.7"
+    "typebox": "^1.4.7",
+    "@forge/drive": "workspace:*"
   },
   "devDependencies": {
     "@types/oidc-provider": "^9.13.1",

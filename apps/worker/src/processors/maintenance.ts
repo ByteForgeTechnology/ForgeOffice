@@ -1,6 +1,7 @@
 import type { Job } from 'bullmq';
 import type { Redis } from 'ioredis';
-import { auditLog, messages, oidcPayloads, orm, transportRuleHits, userSessions, users, type Database } from '@forge/db';
+import { auditLog, messages, oidcPayloads, orm, organizations, transportRuleHits, userSessions, users, type Database } from '@forge/db';
+import { cleanupUploads, purgeExpired, type DriveContext } from '@forge/drive';
 import { expungeMessages, type MailContext } from '@forge/mail';
 import { VOLUME_SCAN_KEY, type JobData, type JobName, type VolumeScan } from '@forge/events';
 import { directorySize } from '@forge/storage';
@@ -9,7 +10,7 @@ import { pruneBackups } from './backup';
 
 const { and, eq, lt } = orm;
 
-export function createMaintenanceProcessor(db: Database, redis: Redis, config: WorkerConfig, mail: MailContext) {
+export function createMaintenanceProcessor(db: Database, redis: Redis, config: WorkerConfig, mail: MailContext, drive: DriveContext) {
   return async (job: Job<JobData<'maintenance'>, unknown, JobName<'maintenance'>>) => {
     switch (job.name) {
       case 'purge-deleted-users': {
@@ -51,6 +52,14 @@ export function createMaintenanceProcessor(db: Database, redis: Redis, config: W
         await db.delete(userSessions).where(lt(userSessions.lastSeenAt, new Date(Date.now() - 120 * 86_400_000)));
         return { pruned: rows.length };
       }
+      case 'purge-drive-trash': {
+        // Each organisation's recycle-bin retention (Admin → ForgeDrive).
+        let purged = 0;
+        for (const org of await db.select({ id: organizations.id, s: organizations.driveSettings }).from(organizations)) purged += await purgeExpired(drive, org.s?.trashDays ?? 93, org.id);
+        return { purged };
+      }
+      case 'cleanup-drive-uploads':
+        return { removed: await cleanupUploads(drive) };
       case 'prune-backups':
         return { pruned: await pruneBackups(db, config, (job.data as JobData<'maintenance', 'prune-backups'>).keep) };
       default:

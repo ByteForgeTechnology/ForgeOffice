@@ -13,7 +13,7 @@ export function HomePage() {
   const { data: me, isLoading } = useMe();
   const { data: branding } = useBranding();
   if (isLoading || !me) return <PageSpinner />;
-  const apps = launcherApps(me.permissions.length > 0, { mail: true, calendar: true, contacts: true, tasks: true, ...me.org?.features }).filter((a) => a.id !== 'home');
+  const apps = launcherApps(me.permissions.length > 0, { mail: true, calendar: true, contacts: true, tasks: true, drive: true, ...me.org?.features }).filter((a) => a.id !== 'home');
   const quota = me.storage.quotaBytes ?? 0;
 
   return (

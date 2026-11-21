@@ -218,6 +218,6 @@ export const CONTACT_FIELDS = [
 export type ContactKey = (typeof CONTACT_FIELDS)[number]['key'];
 
 /** Optional products an administrator can switch off (ForgeDirectory is always on). */
-export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks';
+export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks' | 'drive';
 export type FeatureFlags = Record<Feature, boolean>;
-export const FEATURE_NAMES: Record<Feature, string> = { mail: 'ForgeMail', calendar: 'ForgeCalendar', contacts: 'ForgeContacts', tasks: 'ForgeTasks' };
+export const FEATURE_NAMES: Record<Feature, string> = { mail: 'ForgeMail', calendar: 'ForgeCalendar', contacts: 'ForgeContacts', tasks: 'ForgeTasks', drive: 'ForgeDrive' };

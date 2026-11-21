@@ -46,7 +46,7 @@ export function adminOrgRoutes(app: App, ctx: AppContext) {
           /** Switch optional products on or off (ForgeDirectory cannot be switched off). */
           features: Type.Optional(
             Type.Object(
-              { mail: Type.Optional(Type.Boolean()), calendar: Type.Optional(Type.Boolean()), contacts: Type.Optional(Type.Boolean()), tasks: Type.Optional(Type.Boolean()) },
+              { mail: Type.Optional(Type.Boolean()), calendar: Type.Optional(Type.Boolean()), contacts: Type.Optional(Type.Boolean()), tasks: Type.Optional(Type.Boolean()), drive: Type.Optional(Type.Boolean()) },
               { additionalProperties: false },
             ),
           ),

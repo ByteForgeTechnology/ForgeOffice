@@ -41,6 +41,24 @@ export interface AppConfig {
   services: Set<ServiceName>;
   /** Apply database migrations at start-up (FORGE_MIGRATE; default: when running the directory service). */
   migrate: boolean;
+  drive: {
+    /** ClamAV daemon for virus scanning (FORGE_CLAMAV=host:port); null = off. */
+    clamav: { host: string; port: number } | null;
+    /** A WOPI Office editor (Euro-Office, or Collabora Online) as browsers reach it (FORGE_OFFICE_URL). */
+    officeUrl: string | null;
+    /** Where this service reaches the editor itself (FORGE_OFFICE_INTERNAL_URL; default officeUrl). */
+    officeInternalUrl: string | null;
+    /**
+     * How the editor is integrated (FORGE_OFFICE_PROTOCOL): "docs" = the
+     * ONLYOFFICE Docs API that Euro-Office speaks natively (real-time
+     * co-editing; the default), "wopi" = WOPI (Collabora Online).
+     */
+    officeProtocol: 'docs' | 'wopi';
+    /** Secret shared with the document server (FORGE_OFFICE_JWT_SECRET = its JWT_SECRET). */
+    officeJwtSecret: string | null;
+    /** Where the editor reaches the drive service's WOPI endpoints (FORGE_WOPI_URL; default the public URL). */
+    wopiUrl: string;
+  };
   mail: {
     /** The mail-store service (FORGE_MAIL_STORE_URL); unset = local mailbox storage. */
     storeUrl: string | null;
@@ -102,6 +120,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     extraClients,
     version: env.FORGE_VERSION ?? '0.2.0',
     services: parseServices(env.FORGE_SERVICES),
+    drive: {
+      clamav: env.FORGE_CLAMAV ? { host: env.FORGE_CLAMAV.split(':')[0]!, port: Number(env.FORGE_CLAMAV.split(':')[1] ?? 3310) } : null,
+      // FORGE_COLLABORA_* are the earlier names, still accepted.
+      officeUrl: (env.FORGE_OFFICE_URL || env.FORGE_COLLABORA_URL)?.replace(/\/+$/, '') || null,
+      officeInternalUrl: (env.FORGE_OFFICE_URL || env.FORGE_COLLABORA_URL) ? (env.FORGE_OFFICE_INTERNAL_URL || env.FORGE_COLLABORA_INTERNAL_URL || env.FORGE_OFFICE_URL || env.FORGE_COLLABORA_URL)!.replace(/\/+$/, '') : null,
+      wopiUrl: (env.FORGE_WOPI_URL ?? publicUrl).replace(/\/+$/, ''),
+      officeProtocol: env.FORGE_OFFICE_PROTOCOL === 'wopi' || (!env.FORGE_OFFICE_PROTOCOL && !env.FORGE_OFFICE_URL && !!env.FORGE_COLLABORA_URL) ? 'wopi' : 'docs',
+      officeJwtSecret: env.FORGE_OFFICE_JWT_SECRET || null,
+    },
     migrate: env.FORGE_MIGRATE ? env.FORGE_MIGRATE === 'true' : parseServices(env.FORGE_SERVICES).has('directory'),
     mail: {
       storeUrl: env.FORGE_MAIL_STORE_URL || null,

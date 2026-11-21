@@ -10,6 +10,7 @@ import { BlobStore } from '@forge/storage';
 import { createMailContext, ensureDkimKey, startMailProtocols } from '@forge/mail';
 import { domains } from '@forge/db';
 import { buildApp } from './app';
+import { processVersion, scanVersion, type DriveContext } from '@forge/drive';
 import { runsAll } from './services';
 import type { AppConfig } from './config';
 import type { AppContext, Queues } from './context';
@@ -90,6 +91,22 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
     audit: new AuditService(dbHandle.db, events, bus, logger),
     verifyAccessToken: createTokenVerifier({ issuer: config.issuer, audience: config.apiAudience, jwks: signing.publicJwks }),
     mail,
+    drive: {
+      db: dbHandle.db,
+      blobs: assets,
+      root: config.volumes.drive.path,
+      log: logger,
+      redis: redis as unknown as DriveContext['redis'],
+      clamav: config.drive.clamav,
+      // New file versions: virus scan, then thumbnail and text extraction (worker, or in-process without Redis).
+      onVersionStored: async (job) => {
+        if (queues) return void (await queues['virus-scan'].add('scan', job));
+        void (async () => {
+          const verdict = await scanVersion(ctx.drive, job).catch((err) => (logger.warn({ err }, 'virus scan failed'), 'error'));
+          if (verdict !== 'infected') await processVersion(ctx.drive, job);
+        })().catch((err) => logger.warn({ err }, 'file processing failed'));
+      },
+    },
   };
 
   await loadSessionPolicy(dbHandle.db);

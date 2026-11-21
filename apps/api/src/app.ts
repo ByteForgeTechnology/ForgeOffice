@@ -35,6 +35,11 @@ import { taskRoutes } from './routes/tasks';
 import { contactRoutes } from './routes/contacts';
 import { davRoutes } from './routes/dav';
 import { mailRoutes } from './routes/mail';
+import { driveRoutes } from './routes/drive';
+import { drivePublicRoutes } from './routes/drive-public';
+import { siteRoutes } from './routes/sites';
+import { adminDriveRoutes } from './routes/admin/drive';
+import { DriveAccessError, DriveError, LockedError } from '@forge/drive';
 import type { App } from './types';
 import { initSharing } from './services/sharing';
 import { SERVICE_NAMES, type ServiceName } from './services';
@@ -49,6 +54,7 @@ const SERVICE_ROUTES: Record<ServiceName, Registrar[]> = {
   calendar: [calendarRoutes, davRoutes],
   contacts: [contactRoutes, davRoutes],
   tasks: [taskRoutes],
+  drive: [driveRoutes, drivePublicRoutes, siteRoutes, adminDriveRoutes],
 };
 
 /** Route groups that belong to an optional product (Admin → Organisation → Features). DAV checks per collection. */
@@ -62,6 +68,10 @@ const ROUTE_FEATURES = new Map<Registrar, Feature>([
   [calendarRoutes, 'calendar'],
   [contactRoutes, 'contacts'],
   [taskRoutes, 'tasks'],
+  [driveRoutes, 'drive'],
+  [drivePublicRoutes, 'drive'],
+  [siteRoutes, 'drive'],
+  [adminDriveRoutes, 'drive'],
 ]);
 
 declare module 'fastify' {
@@ -77,6 +87,8 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider | null, opt
     ...(opts.logger ? { loggerInstance: opts.logger } : { logger: false }),
     trustProxy: config.trustProxy,
     bodyLimit: 256 * 1024,
+    // Signed tokens (download URLs, sharing links) travel in the path.
+    maxParamLength: 4096,
   }).withTypeProvider<TypeBoxTypeProvider>() as unknown as App;
 
   app.decorateRequest('principal', null);
@@ -86,15 +98,17 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider | null, opt
       useDefaults: false,
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        // Euro-Office's editor loader (api.js) when Office editing is set up.
+        scriptSrc: ["'self'", ...(config.drive.officeUrl ? [new URL(config.drive.officeUrl).origin] : [])],
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-        frameSrc: ["'self'", 'blob:'],
+        // The Office editor (Euro-Office) is embedded and posted to when configured.
+        frameSrc: ["'self'", 'blob:', ...(config.drive.officeUrl ? [new URL(config.drive.officeUrl).origin] : [])],
         connectSrc: ["'self'"],
         fontSrc: ["'self'"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
-        formAction: ["'self'"],
+        formAction: ["'self'", ...(config.drive.officeUrl ? [new URL(config.drive.officeUrl).origin] : [])],
         frameAncestors: ["'none'"],
       },
     },
@@ -120,6 +134,9 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider | null, opt
     if (err.validation) {
       return reply.code(400).send({ error: 'validation_error', message: err.message });
     }
+    if (err instanceof DriveError || err instanceof DriveAccessError) return reply.code(err.status).send({ error: err instanceof DriveError ? err.code : err.status === 404 ? 'not_found' : 'forbidden', message: err.message });
+    if (err instanceof LockedError) return reply.code(423).send({ error: 'locked', message: err.message });
+    if (err.name === 'BlobTooLargeError') return reply.code(413).send({ error: 'too_large', message: err.message });
     if (err instanceof FeatureDisabledError) return reply.code(403).send({ error: 'feature_disabled', feature: err.feature, message: err.message });
     if (err.name === 'TransportRejectedError') return reply.code(400).send({ error: 'rejected_by_policy', message: `Your message was not sent: ${err.message}` });
     if (isUniqueViolation(err)) return reply.code(409).send({ error: 'conflict', message: 'That value is already in use' });

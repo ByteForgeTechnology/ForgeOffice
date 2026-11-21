@@ -4,6 +4,7 @@ import type { TokenVerifier } from '@forge/auth';
 import type { EventBus, QueueName, Redis, TypedQueue } from '@forge/events';
 import type { BlobStore } from '@forge/storage';
 import type { MailContext } from '@forge/mail';
+import type { DriveContext } from '@forge/drive';
 import type { AppConfig } from './config';
 import type { DerivedKeys } from './secrets';
 import type { SigningKeys } from './oidc/keys';
@@ -30,4 +31,6 @@ export interface AppContext {
   verifyAccessToken: TokenVerifier;
   /** Mail engine (stores, delivery, scheduling). */
   mail: MailContext;
+  /** ForgeDrive engine (libraries, files, versions on forge_drive_data). */
+  drive: DriveContext;
 }

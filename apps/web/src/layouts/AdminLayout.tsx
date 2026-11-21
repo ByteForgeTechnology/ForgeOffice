@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Outlet, useLocation } from 'react-router';
 import {
   Activity,
+  HardDrive,
   ToggleRight,
   AppWindow,
   Ban,
@@ -149,15 +150,21 @@ export const ADMIN_NAV: NavSection[] = [
   },
   {
     title: 'ForgeDrive',
+    feature: 'drive',
     items: [
       {
-        to: '',
-        label: 'Coming in phase 3',
+        to: '/admin/drive/settings',
+        label: 'Drive settings',
         icon: FolderOpen,
-        perm: 'system:read',
+        perm: 'org:read',
+      },
+      {
+        to: '/admin/drive/libraries',
+        label: 'Libraries & storage',
+        icon: HardDrive,
+        perm: 'org:read',
       },
     ],
-    comingSoon: 'phase 3',
   },
   {
     title: 'ForgeTeam',

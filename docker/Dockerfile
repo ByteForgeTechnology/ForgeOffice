@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # One image runs every ForgeOffice container: the back-end services, web apps,
-# mail-store, SMTP, IMAP and the worker (see docker-compose.yml).
+# drive, mail-store, SMTP, IMAP and the worker (see docker-compose.yml).
 
 ARG NODE_VERSION=24
 FROM node:${NODE_VERSION}-trixie-slim AS base
@@ -22,6 +22,7 @@ COPY packages/events/package.json packages/events/
 COPY packages/storage/package.json packages/storage/
 COPY packages/mail/package.json packages/mail/
 COPY packages/calendar/package.json packages/calendar/
+COPY packages/drive/package.json packages/drive/
 COPY packages/ui/package.json packages/ui/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 COPY . .
@@ -45,6 +46,7 @@ COPY --from=build /app/packages/events/package.json packages/events/
 COPY --from=build /app/packages/storage/package.json packages/storage/
 COPY --from=build /app/packages/mail/package.json packages/mail/
 COPY --from=build /app/packages/calendar/package.json packages/calendar/
+COPY --from=build /app/packages/drive/package.json packages/drive/
 COPY --from=build /app/packages/ui/package.json packages/ui/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile --prod
 
@@ -70,7 +72,7 @@ RUN mkdir -p /data/mail /data/drive /data/team /data/certs /data/backups \
  && chown -R node:node /data \
  && chmod 700 /data/certs
 USER node
-EXPOSE 8080 8081 8082 8083 8084 8085 8086 8091 8092 8093 8094 8095 8096 25 587 465 143 993
+EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8091 8092 8093 8094 8095 8096 8097 25 587 465 143 993
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "apps/api/dist/main.js"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \

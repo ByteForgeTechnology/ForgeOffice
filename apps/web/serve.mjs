@@ -31,16 +31,21 @@ const TYPES = {
   '.webmanifest': 'application/manifest+json',
 };
 
-// Same policy the API applied when it served the web client.
+// Same policy the API applied when it served the web client. FORGE_FRAME_SOURCES
+// adds origins the app may embed and post to (the Office editor, Euro-Office).
+const FRAMES = (process.env.FORGE_FRAME_SOURCES ?? '')
+  .split(/\s+/)
+  .filter(Boolean)
+  .map((u) => new URL(u).origin)
+  .join(' ');
 const SECURITY_HEADERS = {
-  'content-security-policy':
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; frame-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  'content-security-policy': `default-src 'self'; script-src 'self' ${FRAMES}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; frame-src 'self' blob: ${FRAMES}; connect-src 'self'; font-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self' ${FRAMES}; frame-ancestors 'none'`,
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
   'x-frame-options': 'DENY',
 };
 
-const OTHER_APPS = ['mail', 'calendar', 'contacts', 'tasks', 'admin'];
+const OTHER_APPS = ['mail', 'calendar', 'contacts', 'tasks', 'admin', 'drive', 'sites'];
 function ownsPath(path) {
   const first = path.split('/')[1] ?? '';
   if (BASE === '/') return APP === 'all' || !OTHER_APPS.includes(first);

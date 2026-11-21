@@ -16,15 +16,20 @@ export interface QueueJobs {
     'scan-volumes': Record<string, never>;
     'prune-audit-log': { olderThanDays: number };
     'prune-backups': { keep: number };
+    /** ForgeDrive: empty recycle bins past the retention period, drop abandoned uploads. */
+    'purge-drive-trash': Record<string, never>;
+    'cleanup-drive-uploads': Record<string, never>;
   };
   'mail-delivery': {
     deliver: { outboundId: string };
   };
   'virus-scan': {
-    scan: { sha256: string; volume: string };
+    /** Scan a ForgeDrive file version with ClamAV. */
+    scan: { itemId: string; versionId: string };
   };
   thumbnails: {
-    generate: { sha256: string; mime: string };
+    /** WebP thumbnail and text extraction (search) for a ForgeDrive file version. */
+    generate: { itemId: string; versionId: string };
   };
 }
 

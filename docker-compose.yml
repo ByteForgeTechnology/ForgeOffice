@@ -14,15 +14,22 @@ name: forgeoffice
 #   contacts-web   8084    contacts app
 #   tasks-web      8085    tasks app
 #   admin-web      8086    admin center
+#   drive-web      8087    ForgeDrive files app and shared-link pages
+#   sites-web      8088    ForgeSites intranet
 #   directory      8091    ForgeDirectory: sign-in (OIDC), users, groups, admin, real-time
 #   mail-api       8092    ForgeMail back end (webmail API, mail admin)
 #   calendar-api   8093    calendars, CalDAV
 #   contacts-api   8094    contacts, CardDAV
 #   tasks-api      8095    tasks
 #   mail-store     8096    mailbox storage (the only container mounting forge_mail_data)
+#   drive-api      8097    ForgeDrive and ForgeSites: files, versions, sharing, WOPI
 #   smtp           25 / 587 / 465   receive mail, submission
 #   imap           143 / 993        mail apps
-#   worker         –       delivery queue, backups, maintenance
+#   worker         –       delivery queue, virus scans, previews, backups, maintenance
+#
+# Optional extras (docker compose --profile av --profile office up -d):
+#   clamav         –       virus scanning of uploads   (set FORGE_CLAMAV=clamav:3310 in .env)
+#   office         9980    Euro-Office: editing Office documents (set FORGE_OFFICE_URL in .env)
 
 x-image: &image
   image: forgeoffice/app:${FORGE_VERSION:-latest}
@@ -38,6 +45,10 @@ x-backend: &backend
     DATABASE_URL: postgres://${POSTGRES_USER:-forge}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-forge}
     REDIS_URL: redis://redis:6379
     FORGE_DATA_ROOT: /data
+    # The Office editor fetches files from, and saves them to, drive-api directly.
+    FORGE_WOPI_URL: ${FORGE_WOPI_URL:-http://drive-api:8097}
+    # drive-api talks to the Office editor inside the Docker network; browsers use FORGE_OFFICE_URL.
+    FORGE_OFFICE_INTERNAL_URL: ${FORGE_OFFICE_INTERNAL_URL:-http://office}
     FORGE_MAIL_STORE_URL: http://mail-store:8096
     FORGE_MAIL_EMBED: "false"
   depends_on: &after-directory
@@ -61,8 +72,12 @@ services:
     restart: unless-stopped
     ports:
       - "${FORGE_HTTP_PORT:-8080}:8080"
+    # Reload automatically when docker/gateway/Caddyfile changes (it is
+    # regenerated as routes are added). The folder is mounted rather than the
+    # file, so a replaced file is still seen.
+    command: ["caddy", "run", "--config", "/etc/caddy/gateway/Caddyfile", "--adapter", "caddyfile", "--watch"]
     volumes:
-      - ./docker/gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./docker/gateway:/etc/caddy/gateway:ro
     depends_on:
       - directory
       - portal-web
@@ -92,6 +107,15 @@ services:
     <<: *web
     environment: { <<: *web-env, FORGE_WEB_APP: admin, PORT: 8086 }
     ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8086:8086"]
+  drive-web:
+    <<: *web
+    # Lets the browser embed the Office editor, when it is set up.
+    environment: { <<: *web-env, FORGE_WEB_APP: drive, PORT: 8087, FORGE_FRAME_SOURCES: "${FORGE_OFFICE_URL:-}" }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8087:8087"]
+  sites-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: sites, PORT: 8088 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8088:8088"]
 
   # ------------------------------------------------------ back-end services --
   directory:
@@ -148,6 +172,14 @@ services:
     ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8095:8095"]
     volumes:
       - forge_certs:/data/certs:ro
+
+  drive-api:
+    <<: *api
+    environment: { <<: *backend-env, FORGE_SERVICES: drive, PORT: 8097 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8097:8097"]
+    volumes:
+      - forge_certs:/data/certs:ro     # share-link and WOPI token keys
+      - forge_drive_data:/data/drive   # files (content-addressed), previews, partial uploads
 
   # ------------------------------------------------------------------ mail --
   # Mailbox storage: raw messages live only here. SMTP, IMAP, the webmail back
@@ -228,6 +260,35 @@ services:
       - forge_certs:/data/certs:ro
       - forge_backups:/data/backups
 
+  # ------------------------------------------------------ optional extras --
+  # Virus scanning: every upload is streamed to clamd before it can be shared
+  # or previewed. Needs about 1.5 GB of memory for the signature database.
+  clamav:
+    image: clamav/clamav:stable
+    profiles: ["av"]
+    restart: unless-stopped
+    volumes:
+      - forge_clamav_db:/var/lib/clamav
+
+  # Euro-Office Document Server: create and edit Word, Excel and PowerPoint
+  # files in the browser, several people at once. FORGE_OFFICE_URL must be an
+  # address browsers can reach, e.g. http://localhost:9980, or
+  # https://office.example.com behind TLS. Needs about 2–4 GB of memory.
+  # It signs and checks every request with FORGE_OFFICE_JWT_SECRET, which
+  # drive-api shares (from .env).
+  office:
+    image: ${FORGE_OFFICE_IMAGE:-ghcr.io/euro-office/documentserver:latest}
+    profiles: ["office"]
+    restart: unless-stopped
+    ports: ["${FORGE_OFFICE_BIND:-127.0.0.1}:9980:80"]
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${FORGE_OFFICE_JWT_SECRET:-}
+      # drive-api, which it fetches and saves files through, is on the private Docker network.
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+    volumes:
+      - forge_office_data:/var/www/euro-office/Data   # settings and generated secrets
+
   # ------------------------------------------------------------- data stores --
   db:
     image: postgres:17-alpine
@@ -278,8 +339,10 @@ volumes:
   forge_db_data:      # PostgreSQL database files
   forge_redis_data:   # Redis AOF/RDB persistence & BullMQ job states
   forge_mail_data:    # Mailbox storage: raw messages (.eml) & attachments — mounted by mail-store
-  forge_drive_data:   # ForgeDrive files, organisation logo & signature images
+  forge_drive_data:   # ForgeDrive files (by SHA-256), previews, organisation logo & signature images
   forge_team_media:   # Chat file drops, voice notes & meeting recordings
   forge_certs:        # TLS certificates, DKIM keys, OIDC signing keys & master secret
   forge_backups:      # Automated snapshots (database dump + volume archives)
+  forge_clamav_db:    # Optional: ClamAV virus signature database
+  forge_office_data:  # Optional: Euro-Office keys and settings
   forge_mdm_data:     # Phase 6 (ForgeManage): installers, .mobileconfig payloads & device logs

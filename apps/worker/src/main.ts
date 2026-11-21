@@ -7,6 +7,10 @@ import { createBackupProcessor } from './processors/backup';
 import { createMaintenanceProcessor } from './processors/maintenance';
 import { createMailDeliveryProcessor } from './processors/mail';
 import { createMailContext } from '@forge/mail';
+import { join } from 'node:path';
+import { BlobStore } from '@forge/storage';
+import type { DriveContext } from '@forge/drive';
+import { createScanProcessor, createThumbnailProcessor } from './processors/drive';
 
 async function main() {
   const config = loadWorkerConfig();
@@ -27,6 +31,8 @@ async function main() {
   await maintenance.upsertJobScheduler('scan-volumes', { every: 15 * 60_000 }, { name: 'scan-volumes', data: {} });
   await maintenance.upsertJobScheduler('purge-deleted-users', { pattern: '30 3 * * *', tz }, { name: 'purge-deleted-users', data: {} });
   await maintenance.upsertJobScheduler('prune-audit-log', { pattern: '45 3 * * *', tz }, { name: 'prune-audit-log', data: { olderThanDays: config.auditRetentionDays } });
+  await maintenance.upsertJobScheduler('purge-drive-trash', { pattern: '15 4 * * *', tz }, { name: 'purge-drive-trash', data: {} });
+  await maintenance.upsertJobScheduler('cleanup-drive-uploads', { every: 60 * 60_000 }, { name: 'cleanup-drive-uploads', data: {} });
   await maintenance.upsertJobScheduler('prune-backups', { pattern: '0 4 * * *', tz }, { name: 'prune-backups', data: { keep: config.backupRetention } });
   // BullMQ types scheduler ids as job names; this id intentionally differs.
   const backupScheduler = backupsQueue as unknown as Queue;
@@ -54,10 +60,18 @@ async function main() {
     },
   });
 
+  // ForgeDrive: content-addressed files on forge_drive_data.
+  const driveBlobs = new BlobStore(join(config.volumes.drive.path, 'blobs'));
+  await driveBlobs.init();
+  const driveCtx: DriveContext = { db: dbHandle.db, blobs: driveBlobs, root: config.volumes.drive.path, log, redis: redis as unknown as DriveContext['redis'], clamav: config.clamav };
+  const thumbnailsQueue = createQueue('thumbnails', conn);
+
   const workers = [
     createWorker('mail-delivery', createMailDeliveryProcessor(mailCtx), conn, { concurrency: 8 }),
     createWorker('backups', createBackupProcessor(dbHandle.db, config, bus, log), conn, { concurrency: 1, lockDuration: 10 * 60_000 }),
-    createWorker('maintenance', createMaintenanceProcessor(dbHandle.db, redis, config, mailCtx), conn, { concurrency: 2 }),
+    createWorker('maintenance', createMaintenanceProcessor(dbHandle.db, redis, config, mailCtx, driveCtx), conn, { concurrency: 2 }),
+    createWorker('virus-scan', createScanProcessor(driveCtx, thumbnailsQueue), conn, { concurrency: 2 }),
+    createWorker('thumbnails', createThumbnailProcessor(driveCtx), conn, { concurrency: 2 }),
   ];
   for (const w of workers) {
     w.on('failed', (job, err) => log.error({ queue: w.name, job: job?.name, id: job?.id, err: err.message }, 'job failed'));

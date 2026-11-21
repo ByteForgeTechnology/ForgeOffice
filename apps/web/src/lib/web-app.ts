@@ -7,12 +7,12 @@
 declare const __FORGE_APP__: string;
 export const WEB_APP: string = __FORGE_APP__;
 
-export type WebAppName = 'portal' | 'mail' | 'calendar' | 'contacts' | 'tasks' | 'admin';
+export type WebAppName = 'portal' | 'mail' | 'calendar' | 'contacts' | 'tasks' | 'admin' | 'drive' | 'sites';
 
 /** The app that owns a path. */
 export function appForPath(path: string): WebAppName {
   const first = path.split(/[?#]/)[0]!.split('/')[1] ?? '';
-  return (['mail', 'calendar', 'contacts', 'tasks', 'admin'] as const).find((a) => a === first) ?? 'portal';
+  return (['mail', 'calendar', 'contacts', 'tasks', 'admin', 'drive', 'sites'] as const).find((a) => a === first) ?? 'portal';
 }
 
 /** Does this bundle contain the page at `path`? */

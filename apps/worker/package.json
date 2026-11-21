@@ -11,7 +11,8 @@
     "bullmq": "^6.7.7",
     "drizzle-orm": "^0.45.4",
     "ioredis": "^6.0.0",
-    "pino": "^10.4.0"
+    "pino": "^10.4.0",
+    "@forge/drive": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^9.0.0",

@@ -1,0 +1,25 @@
+{
+  "name": "@forge/drive",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forge/db": "workspace:*",
+    "@forge/storage": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "pdfjs-dist": "^6.5.438",
+    "sharp": "^0.35.5",
+    "@forge/auth": "workspace:*",
+    "@forge/events": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^5.1.0"
+  }
+}

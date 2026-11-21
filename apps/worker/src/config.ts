@@ -21,6 +21,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
     smtpRelay: env.FORGE_SMTP_RELAY || null,
     /** The mail-store service (raw messages); unset = local mailbox storage. */
     mailStoreUrl: env.FORGE_MAIL_STORE_URL || null,
+    /** ClamAV daemon for ForgeDrive virus scanning (host:port). */
+    clamav: env.FORGE_CLAMAV ? { host: env.FORGE_CLAMAV.split(':')[0]!, port: Number(env.FORGE_CLAMAV.split(':')[1] ?? 3310) } : null,
   };
 }
 

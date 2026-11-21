@@ -259,8 +259,10 @@ function signInPolicy(db: AppContext['db']) {
       const session = kctx.oidc.session;
       if (!session?.accountId || !session.uid) return interactionPolicy.Check.NO_NEED_TO_PROMPT;
       const row = await findSession(db, session.uid);
-      // A sign-in newer than the record (just signed in again) starts afresh.
-      const freshLogin = !!session.loginTs && row && session.loginTs * 1000 > row.loginAt.getTime();
+      // Having just signed in (this interaction), or a sign-in newer than the
+      // record, starts afresh. loginTs has one-second resolution, so the
+      // interaction result is what tells a quick re-sign-in apart.
+      const freshLogin = !!kctx.oidc.result?.login || (!!session.loginTs && !!row && session.loginTs * 1000 > row.loginAt.getTime());
       if (row && !freshLogin && row.userId === session.accountId && sessionProblem(row)) return interactionPolicy.Check.REQUEST_PROMPT;
       if (session.loginTs && Date.now() / 1000 - session.loginTs > sessionPolicy().maxSeconds) return interactionPolicy.Check.REQUEST_PROMPT;
       return interactionPolicy.Check.NO_NEED_TO_PROMPT;
