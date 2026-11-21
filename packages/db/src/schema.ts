@@ -27,6 +27,9 @@ const updatedAt = () =>
 // Organizations & domains
 // ---------------------------------------------------------------------------
 
+export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks';
+export type FeatureFlags = Record<Feature, boolean>;
+
 export const organizations = pgTable('organizations', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
@@ -41,6 +44,8 @@ export const organizations = pgTable('organizations', {
   sessionMaxHours: integer('session_max_hours').notNull().default(336),
   /** Sign out after this many minutes without activity; null = never. */
   sessionIdleMinutes: integer('session_idle_minutes'),
+  /** Optional products switched on for the organisation (ForgeDirectory is always on). */
+  features: jsonb('features').$type<FeatureFlags>().notNull().default({ mail: true, calendar: true, contacts: true, tasks: true }),
   /** Largest message accepted by SMTP and the composer. */
   mailMaxMessageBytes: integer('mail_max_message_bytes').notNull().default(35 * 1024 * 1024),
   /** Seconds a sent message is held so the user can undo it. */

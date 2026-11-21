@@ -19,6 +19,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
     publicUrl: (env.FORGE_PUBLIC_URL ?? 'http://localhost:8080').replace(/\/+$/, ''),
     mailHostname: env.FORGE_MAIL_HOSTNAME ?? new URL(env.FORGE_PUBLIC_URL ?? 'http://localhost:8080').hostname,
     smtpRelay: env.FORGE_SMTP_RELAY || null,
+    /** The mail-store service (raw messages); unset = local mailbox storage. */
+    mailStoreUrl: env.FORGE_MAIL_STORE_URL || null,
   };
 }
 

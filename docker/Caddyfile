@@ -5,5 +5,6 @@
 
 {$FORGE_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy api:8080
+	# The gateway sends each request on to the right ForgeOffice container.
+	reverse_proxy gateway:8080
 }

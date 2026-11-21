@@ -41,6 +41,7 @@ async function main() {
   const mailCtx = await createMailContext({
     db: dbHandle.db,
     mailDir: config.volumes.mail.path,
+    storeUrl: config.mailStoreUrl,
     bus,
     deliveryQueue: createQueue('mail-delivery', conn),
     log,

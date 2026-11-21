@@ -37,8 +37,41 @@ import { davRoutes } from './routes/dav';
 import { mailRoutes } from './routes/mail';
 import type { App } from './types';
 import { initSharing } from './services/sharing';
+import { SERVICE_NAMES, type ServiceName } from './services';
+import { FeatureDisabledError, featureEnabled, type Feature } from '@forge/db';
 
-export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { logger?: FastifyBaseLogger } = {}) {
+type Registrar = (app: App, ctx: AppContext) => void;
+
+/** Route groups of each service. */
+const SERVICE_ROUTES: Record<ServiceName, Registrar[]> = {
+  directory: [publicRoutes, meRoutes, directoryRoutes, adminUserRoutes, adminGroupRoutes, adminDomainRoutes, adminRoleRoutes, adminOrgRoutes, adminAuditRoutes, adminSystemRoutes, adminAppRoutes, connectedAppRoutes, sessionRoutes],
+  mail: [mailRoutes, adminMailRoutes, adminSharedMailboxRoutes, adminTransportRuleRoutes, adminSenderListRoutes, adminSignatureRoutes, signatureImageRoutes],
+  calendar: [calendarRoutes, davRoutes],
+  contacts: [contactRoutes, davRoutes],
+  tasks: [taskRoutes],
+};
+
+/** Route groups that belong to an optional product (Admin → Organisation → Features). DAV checks per collection. */
+const ROUTE_FEATURES = new Map<Registrar, Feature>([
+  [mailRoutes, 'mail'],
+  [adminSharedMailboxRoutes, 'mail'],
+  [adminTransportRuleRoutes, 'mail'],
+  [adminSenderListRoutes, 'mail'],
+  [adminSignatureRoutes, 'mail'],
+  [signatureImageRoutes, 'mail'],
+  [calendarRoutes, 'calendar'],
+  [contactRoutes, 'contacts'],
+  [taskRoutes, 'tasks'],
+]);
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** "METHOD /url" → the service that serves it. */
+    routeOwners: Map<string, ServiceName>;
+  }
+}
+
+export async function buildApp(ctx: AppContext, forge: ForgeProvider | null, opts: { logger?: FastifyBaseLogger } = {}) {
   const { config } = ctx;
   const app = Fastify({
     ...(opts.logger ? { loggerInstance: opts.logger } : { logger: false }),
@@ -87,6 +120,7 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { lo
     if (err.validation) {
       return reply.code(400).send({ error: 'validation_error', message: err.message });
     }
+    if (err instanceof FeatureDisabledError) return reply.code(403).send({ error: 'feature_disabled', feature: err.feature, message: err.message });
     if (err.name === 'TransportRejectedError') return reply.code(400).send({ error: 'rejected_by_policy', message: `Your message was not sent: ${err.message}` });
     if (isUniqueViolation(err)) return reply.code(409).send({ error: 'conflict', message: 'That value is already in use' });
     if (err.statusCode && err.statusCode < 500) {
@@ -96,9 +130,11 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { lo
     return reply.code(500).send({ error: 'internal_error', message: 'Something went wrong' });
   });
 
-  // --- OIDC provider (Koa app) mounted under /oidc --------------------------
-  await app.register(middie);
-  app.use('/oidc', forge.provider.callback());
+  // --- OIDC provider (Koa app) mounted under /oidc: the directory service -------
+  if (forge && config.services.has('directory')) {
+    await app.register(middie);
+    app.use('/oidc', forge.provider.callback());
+  }
 
   // --- Health probes ---------------------------------------------------------
   app.get('/healthz', { schema: { hide: true } }, async () => ({ status: 'ok' }));
@@ -127,40 +163,46 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider, opts: { lo
   };
 
   // --- Routes ----------------------------------------------------------------
-  const scoped = (register: (app: App, ctx: AppContext) => void) =>
-    app.register(async (instance) => register(instance as unknown as App, ctx));
+  // Each service registers only its own routes; routeOwners records which
+  // service serves which route (the gateway configuration is generated from it).
+  const has = (s: ServiceName) => config.services.has(s);
+  const routeOwners = new Map<string, ServiceName>();
+  app.decorate('routeOwners', routeOwners);
+  const scoped = (service: ServiceName, register: (app: App, ctx: AppContext) => void) =>
+    app.register(async (instance) => {
+      instance.addHook('onRoute', (r) => {
+        for (const m of [r.method].flat()) routeOwners.set(`${m} ${r.url}`, service);
+      });
+      // Products an administrator has switched off answer 403 (data is kept).
+      const feature = ROUTE_FEATURES.get(register);
+      if (feature)
+        instance.addHook('onRequest', async () => {
+          if (!(await featureEnabled(ctx.db, feature))) throw new FeatureDisabledError(feature);
+        });
+      register(instance as unknown as App, ctx);
+    });
 
   initSharing(ctx.db);
-  interactionRoutes(app, ctx, forge, serveSpa);
-  await scoped(publicRoutes);
-  await scoped(meRoutes);
-  await scoped(directoryRoutes);
-  await scoped(adminUserRoutes);
-  await scoped(adminGroupRoutes);
-  await scoped(adminDomainRoutes);
-  await scoped(adminRoleRoutes);
-  await scoped(adminOrgRoutes);
-  await scoped(adminAuditRoutes);
-  await scoped(adminSystemRoutes);
-  await scoped(adminMailRoutes);
-  await scoped(adminSharedMailboxRoutes);
-  await scoped(adminTransportRuleRoutes);
-  await scoped(adminSenderListRoutes);
-  await scoped(adminAppRoutes);
-  await scoped(connectedAppRoutes);
-  await scoped(sessionRoutes);
-  await scoped(adminSignatureRoutes);
-  await scoped(signatureImageRoutes);
-  await scoped(mailRoutes);
-  await scoped(calendarRoutes);
-  await scoped(taskRoutes);
-  await scoped(contactRoutes);
-  await scoped(davRoutes);
+  if (has('directory') && forge) {
+    interactionRoutes(app, ctx, forge, serveSpa);
+    for (const r of ['/interaction/:uid', '/oidc/*']) routeOwners.set(`GET ${r}`, 'directory');
+  }
+  const registered = new Set<Registrar>();
+  for (const service of SERVICE_NAMES) {
+    if (!has(service)) continue;
+    for (const register of SERVICE_ROUTES[service]) {
+      // CalDAV and CardDAV share one handler: register it once when both services run here.
+      if (registered.has(register)) continue;
+      registered.add(register);
+      await scoped(service, register);
+    }
+  }
 
   app.setNotFoundHandler((req, reply) => {
     const path = req.url.split('?')[0]!;
     const wantsHtml = req.method === 'GET' && (req.headers.accept ?? '').includes('text/html');
-    if (wantsHtml && !path.startsWith('/api/') && !path.startsWith('/oidc/') && !path.startsWith('/dav') && !/\.[a-z0-9]+$/i.test(path)) return serveSpa(reply);
+    // Only the directory service renders web pages (the sign-in screens); in a split install the web containers serve the apps.
+    if (config.services.has('directory') && wantsHtml && !path.startsWith('/api/') && !path.startsWith('/oidc/') && !path.startsWith('/dav') && !/\.[a-z0-9]+$/i.test(path)) return serveSpa(reply);
     return reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${path}` });
   });
 

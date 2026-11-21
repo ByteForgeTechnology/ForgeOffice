@@ -1,5 +1,5 @@
 import { buildTask, deleteCalendarObject, ensureTaskLists, findByUid, flagTaskUid, messageIdFromTaskUid, parseTask, putCalendarObject } from '@forge/calendar';
-import { messages, orm, users, type Message } from '@forge/db';
+import { featureEnabled, messages, orm, users, type Message } from '@forge/db';
 import type { MailContext } from './context';
 import { setFlags } from './store';
 
@@ -31,6 +31,8 @@ function notifyTasks(ctx: Ctx, userIds: string[]) {
 export async function syncFlagTasks(ctx: Ctx, changed: Message[]): Promise<void> {
   if (!changed.length) return;
   try {
+    // ForgeTasks switched off: flags are kept, no tasks are made (until it is switched back on).
+    if (!(await featureEnabled(ctx.db, 'tasks'))) return;
     const owners = await ctx.db.select({ id: users.id, orgId: users.orgId }).from(users).where(inArray(users.id, [...new Set(changed.map((m) => m.userId))]));
     const touched: string[] = [];
     for (const owner of owners) {

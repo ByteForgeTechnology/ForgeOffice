@@ -32,8 +32,10 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node build-apps.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "build:one": "vite build",
+    "serve": "node serve.mjs"
   }
 }

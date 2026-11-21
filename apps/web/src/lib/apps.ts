@@ -1,8 +1,11 @@
 import { Calendar, FolderOpen, Home, ListTodo, Mail, MessagesSquare, Settings2, UserCircle2, Users } from 'lucide-react';
 import type { LauncherApp } from '@forge/ui';
+import type { Feature, FeatureFlags } from './types';
 
-export function launcherApps(isAdmin: boolean): LauncherApp[] {
-  return [
+/** Launcher entries; apps whose product is switched off are left out. */
+export function launcherApps(isAdmin: boolean, features: FeatureFlags = { mail: true, calendar: true, contacts: true, tasks: true }): LauncherApp[] {
+  const needs: Record<string, Feature> = { mail: 'mail', calendar: 'calendar', people: 'contacts', tasks: 'tasks' };
+  return ([
     { id: 'home', name: 'Home', description: 'Your ForgeOffice portal', href: '/', icon: Home, color: 'bg-brand', available: true },
     { id: 'mail', name: 'Mail', description: 'Email with conversations and rules', href: '/mail', icon: Mail, color: 'bg-sky-600', available: true },
     { id: 'calendar', name: 'Calendar', description: 'Meetings, rooms and schedules', href: '/calendar', icon: Calendar, color: 'bg-indigo-600', available: true },
@@ -12,7 +15,7 @@ export function launcherApps(isAdmin: boolean): LauncherApp[] {
     { id: 'team', name: 'Team', description: 'Chat, channels and meetings', href: '/apps/team', icon: MessagesSquare, color: 'bg-violet-600', available: false },
     { id: 'account', name: 'Account', description: 'Profile and security', href: '/account', icon: UserCircle2, color: 'bg-zinc-600', available: true },
     ...(isAdmin ? [{ id: 'admin', name: 'Admin', description: 'Admin center', href: '/admin', icon: Settings2, color: 'bg-amber-600', available: true }] : []),
-  ];
+  ] as LauncherApp[]).filter((a) => !needs[a.id] || features[needs[a.id]!]);
 }
 
 export const UPCOMING_APPS: Record<string, { name: string; phase: number; summary: string; features: string[] }> = {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { FeatureFlags } from './types';
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import type { Branding, Me } from './types';
@@ -20,6 +21,12 @@ export function useApplyBranding() {
 
 export function useMe(enabled = true) {
   return useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/api/v1/me'), enabled, staleTime: 30_000 });
+}
+
+/** Which optional products are switched on (all on until /me has loaded). */
+export function useFeatures(): FeatureFlags {
+  const { data } = useMe();
+  return { mail: true, calendar: true, contacts: true, tasks: true, ...data?.org?.features };
 }
 
 export function useCan(permission: string): boolean {

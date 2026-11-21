@@ -1,7 +1,7 @@
 import type { EventEmitter } from 'node:events';
 import type { Database } from '@forge/db';
 import type { EventBus } from '@forge/events';
-import type { BlobStore } from '@forge/storage';
+import type { ContentStore } from '@forge/storage';
 
 export interface MailLogger {
   info: (obj: unknown, msg?: string) => void;
@@ -33,7 +33,8 @@ export interface OutboundScheduler {
 export interface MailContext {
   db: Database;
   /** Content-addressed store inside forge_mail_data. */
-  blobs: BlobStore;
+  /** Raw messages: the mail-store service in production, a local directory in development. */
+  blobs: ContentStore;
   bus: EventBus | null;
   events: EventEmitter;
   scheduler: OutboundScheduler;

@@ -6,7 +6,9 @@ import { AppLauncher, Avatar, ThemeSwitcher, cn } from '@forge/ui';
 import { api } from '../lib/api';
 import { launcherApps } from '../lib/apps';
 import { useAuth } from '../lib/auth';
-import { useBranding, useDebounced, useMe } from '../lib/hooks';
+import { useBranding, useDebounced, useFeatures, useMe } from '../lib/hooks';
+import { appForPath } from '../lib/web-app';
+import { FeatureOff } from '../components/FeatureOff';
 import { disconnectSocket } from '../lib/realtime';
 import type { DirectoryCard, Group } from '../lib/types';
 
@@ -15,6 +17,7 @@ export function Shell() {
   const { data: branding } = useBranding();
   const { data: me } = useMe();
   const isAdmin = (me?.permissions.length ?? 0) > 0;
+  const features = useFeatures();
   const { pathname } = useLocation();
   // Mail and Calendar use the full viewport height with their own panes.
   const fullBleed = pathname === '/mail' || pathname === '/calendar' || pathname === '/tasks';
@@ -23,7 +26,7 @@ export function Shell() {
     <div className={cn('flex flex-col', fullBleed ? 'h-dvh overflow-hidden' : 'min-h-screen')}>
       <header className="sticky top-0 z-30 bg-brand text-white shadow-sm">
         <div className="mx-auto flex h-14 max-w-screen-2xl items-center gap-2 px-3 sm:gap-3 sm:px-4">
-          <AppLauncher apps={launcherApps(isAdmin)} onNavigate={(href) => navigate(href)} />
+          <AppLauncher apps={launcherApps(isAdmin, features)} onNavigate={(href) => navigate(href)} />
           <Link to="/" className="flex min-w-0 items-center gap-2 font-semibold">
             {branding?.logoUrl ? (
               <img src={branding.logoUrl} alt="" className="size-7 rounded-md bg-white object-contain p-0.5" />
@@ -46,15 +49,25 @@ export function Shell() {
       </header>
       {fullBleed ? (
         <main className="min-h-0 flex-1">
-          <Outlet />
+          <FeatureGate />
         </main>
       ) : (
         <main className="mx-auto w-full max-w-screen-2xl flex-1 px-4 py-6 sm:px-6">
-          <Outlet />
+          <FeatureGate />
         </main>
       )}
     </div>
   );
+}
+
+/** An app whose product an administrator has switched off shows a notice instead. */
+function FeatureGate() {
+  const { pathname } = useLocation();
+  const features = useFeatures();
+  const app = appForPath(pathname);
+  const feature = app === 'contacts' ? 'contacts' : app === 'mail' || app === 'calendar' || app === 'tasks' ? app : null;
+  if (feature && !features[feature]) return <FeatureOff feature={feature} />;
+  return <Outlet />;
 }
 
 /** Federated search box. Phase 1 searches the directory (people & groups). */

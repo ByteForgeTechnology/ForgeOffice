@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Outlet, useLocation } from 'react-router';
 import {
   Activity,
+  ToggleRight,
   AppWindow,
   Ban,
   Building2,
@@ -23,7 +24,9 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { EmptyState, cn } from '@forge/ui';
-import { useMe } from '../lib/hooks';
+import { useFeatures, useMe } from '../lib/hooks';
+import { FeatureOff } from '../components/FeatureOff';
+import type { Feature } from '../lib/types';
 
 interface NavItem {
   to: string;
@@ -37,6 +40,8 @@ interface NavSection {
   items: NavItem[];
   /** Products not built yet: listed, but not links. */
   comingSoon?: string;
+  /** Hidden while this product is switched off (Organisation → Features). */
+  feature?: Feature;
 }
 
 /** Admin pages grouped by product, then organisation-wide settings. */
@@ -90,6 +95,7 @@ export const ADMIN_NAV: NavSection[] = [
   },
   {
     title: 'ForgeMail',
+    feature: 'mail',
     items: [
       {
         to: '/admin/mail/shared-mailboxes',
@@ -131,6 +137,7 @@ export const ADMIN_NAV: NavSection[] = [
   },
   {
     title: 'ForgeCalendar',
+    feature: 'calendar',
     items: [
       {
         to: '/admin/calendar/rooms',
@@ -171,6 +178,12 @@ export const ADMIN_NAV: NavSection[] = [
         to: '/admin/organisation/settings',
         label: 'Settings',
         icon: Building2,
+        perm: 'org:read',
+      },
+      {
+        to: '/admin/organisation/features',
+        label: 'Features',
+        icon: ToggleRight,
         perm: 'org:read',
       },
       {
@@ -227,10 +240,15 @@ export function AdminLayout() {
   const { data: me } = useMe();
   const { pathname } = useLocation();
   const can = (perm: string) => !!me?.permissions.includes(perm);
-  const sections = ADMIN_NAV.map((s) => ({
-    ...s,
-    items: s.items.filter((i) => can(i.perm)),
-  })).filter((s) => s.items.length);
+  const features = useFeatures();
+  const sections = ADMIN_NAV.filter((s) => !s.feature || features[s.feature])
+    .map((s) => ({
+      ...s,
+      items: s.items.filter((i) => can(i.perm)),
+    }))
+    .filter((s) => s.items.length);
+  // Admin pages of a product that is switched off (e.g. a bookmark to /admin/mail/flow).
+  const offSection = ADMIN_NAV.find((s) => s.feature && !features[s.feature] && s.items.some((i) => i.to && pathname.startsWith(i.to)));
   const links = sections.filter((s) => !s.comingSoon).flatMap((s) => s.items);
   const { expanded, toggle, expand } = useExpanded();
   // Always show the section of the page you are on (e.g. after following a link into it).
@@ -287,7 +305,7 @@ export function AdminLayout() {
         </div>
       </nav>
       <div className="min-w-0 flex-1">
-        <Outlet />
+        {offSection?.feature ? <FeatureOff feature={offSection.feature} /> : <Outlet />}
       </div>
     </div>
   );

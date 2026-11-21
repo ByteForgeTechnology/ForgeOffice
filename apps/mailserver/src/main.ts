@@ -23,6 +23,7 @@ async function main() {
   const ctx = await createMailContext({
     db: dbHandle.db,
     mailDir: volumes.mail.path,
+    storeUrl: env.FORGE_MAIL_STORE_URL || null,
     bus,
     deliveryQueue,
     log,
@@ -45,7 +46,7 @@ async function main() {
     allowInsecureAuth: env.FORGE_MAIL_ALLOW_INSECURE_AUTH === 'true',
     maxMessageBytes: Number(env.FORGE_MAIL_MAX_BYTES ?? 35 * 1024 * 1024),
   });
-  const stopHeartbeat = redis ? startHeartbeat(redis, { service: 'mailserver', version: env.FORGE_VERSION ?? '0.2.0' }) : () => {};
+  const stopHeartbeat = redis ? startHeartbeat(redis, { service: env.FORGE_MAIL_ROLE ?? 'mailserver', version: env.FORGE_VERSION ?? '0.2.0' }) : () => {};
   log.info({ hostname, ports: protocols.ports }, 'ForgeMail SMTP/IMAP server ready');
 
   const shutdown = async () => {

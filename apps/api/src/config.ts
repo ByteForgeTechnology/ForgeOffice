@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { parseServices, type ServiceName } from './services';
 import { fileURLToPath } from 'node:url';
 import { resolveVolumes, type ForgeVolume, type VolumeKey } from '@forge/storage';
 
@@ -36,7 +37,13 @@ export interface AppConfig {
   composeProject: string;
   extraClients: OidcClientConfig[];
   version: string;
+  /** Which back-end services this process runs (FORGE_SERVICES; default all). */
+  services: Set<ServiceName>;
+  /** Apply database migrations at start-up (FORGE_MIGRATE; default: when running the directory service). */
+  migrate: boolean;
   mail: {
+    /** The mail-store service (FORGE_MAIL_STORE_URL); unset = local mailbox storage. */
+    storeUrl: string | null;
     hostname: string;
     relayUrl: string | null;
     /** Run SMTP/IMAP inside the API process (development / single-container). */
@@ -88,12 +95,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     logLevel: env.LOG_LEVEL ?? (nodeEnv === 'production' ? 'info' : 'debug'),
     volumes: resolveVolumes({ ...env, FORGE_DATA_ROOT: dataRoot }),
     migrationsDir: env.FORGE_MIGRATIONS_DIR ?? fileURLToPath(new URL('packages/db/drizzle', ROOT)),
-    webDir: env.FORGE_WEB_DIR ?? fileURLToPath(new URL('apps/web/dist', ROOT)),
+    // The all-in-one web build; the directory service uses the portal build (sign-in pages).
+    webDir: env.FORGE_WEB_DIR ?? fileURLToPath(new URL('apps/web/dist/all', ROOT)),
     dockerSocket: env.FORGE_DOCKER_SOCKET || null,
     composeProject: env.COMPOSE_PROJECT_NAME ?? 'forgeoffice',
     extraClients,
     version: env.FORGE_VERSION ?? '0.2.0',
+    services: parseServices(env.FORGE_SERVICES),
+    migrate: env.FORGE_MIGRATE ? env.FORGE_MIGRATE === 'true' : parseServices(env.FORGE_SERVICES).has('directory'),
     mail: {
+      storeUrl: env.FORGE_MAIL_STORE_URL || null,
       hostname: env.FORGE_MAIL_HOSTNAME ?? new URL(publicUrl).hostname,
       relayUrl: env.FORGE_SMTP_RELAY || null,
       embed: env.FORGE_MAIL_EMBED ? env.FORGE_MAIL_EMBED === 'true' : dev,

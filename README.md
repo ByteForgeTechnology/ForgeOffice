@@ -12,14 +12,38 @@ Drive and Team (phases 3–4) plug into this foundation.
 ```bash
 cp .env.example .env          # set FORGE_PUBLIC_URL and POSTGRES_PASSWORD
 docker compose up -d --build
-docker compose logs api | grep -A3 "setup token"
+docker compose logs directory | grep -A3 "setup token"
 ```
 
-Ports 25, 587, 465, 143 and 993 are published by the `mail` container for SMTP and IMAP.
+ForgeOffice runs as one container per component, all from one image. Browsers, phones and desktop apps use the **gateway** (`FORGE_PUBLIC_URL`, port 8080), which sends each request to the container that serves it:
+
+| Container | Port | What it does |
+|---|---|---|
+| `gateway` | 8080 | One address for everything (Caddy; config generated from the code) |
+| `portal-web` | 8081 | Web: home, account, sign-in and setup pages |
+| `mail-web` | 8082 | Web: webmail |
+| `calendar-web` | 8083 | Web: calendar |
+| `contacts-web` | 8084 | Web: contacts |
+| `tasks-web` | 8085 | Web: tasks |
+| `admin-web` | 8086 | Web: admin center |
+| `directory` | 8091 | ForgeDirectory: sign-in (OpenID Connect), users, groups, roles, organisation, audit, real-time updates; applies database migrations |
+| `mail-api` | 8092 | ForgeMail back end: webmail API, mail admin (transport rules, signatures, smarthost…) |
+| `calendar-api` | 8093 | Calendars, scheduling, CalDAV |
+| `contacts-api` | 8094 | Contacts, CardDAV |
+| `tasks-api` | 8095 | Tasks |
+| `mail-store` | 8096 | Mailbox storage: the only container that mounts `forge_mail_data` |
+| `smtp` | 25, 587, 465 | Receiving mail and submission from mail apps |
+| `imap` | 143, 993 | Mail apps (IMAP) |
+| `worker` | – | Outgoing delivery queue, backups, maintenance |
+| `db`, `redis` | – | PostgreSQL (shared by the services) and Redis (queues, events, heartbeats) |
+
+The web, back-end and storage ports are published on `127.0.0.1` only. Set `FORGE_SERVICE_BIND=0.0.0.0` to expose them, but browsers should always go through the gateway: it keeps sign-in and the apps on one origin. SMTP and IMAP are published on all interfaces from their own containers. SMTP, IMAP, the webmail back end and the worker store and read messages through `mail-store`, using a service token derived from the master secret. The worker also mounts the mailbox volume read-only, for backups and usage scans.
+
+`docker/gateway/Caddyfile` is generated from the routes each service registers, and a test fails if it is out of date. Regenerate it with `UPDATE_GATEWAY=1 pnpm --filter @forge/api test gateway`. The same image still runs everything in one process (`FORGE_SERVICES=all`, the default), which is used in development and tests.
 
 Open `FORGE_PUBLIC_URL`, enter the setup token, and complete the wizard (organisation, domain, branding, policies, first administrator). The token is single-use; it is also stored in the `forge_certs` volume as `setup-token` until setup completes.
 
-For HTTPS with automatic Let's Encrypt certificates, set `FORGE_DOMAIN` and `FORGE_PUBLIC_URL=https://<domain>` and run `docker compose --profile tls up -d`.
+For HTTPS with automatic Let's Encrypt certificates, set `FORGE_DOMAIN` and `FORGE_PUBLIC_URL=https://<domain>` and run `docker compose --profile tls up -d`. Caddy terminates TLS in front of the gateway.
 
 ## Development
 
@@ -55,17 +79,19 @@ In development the browser only talks to Vite, which proxies `/api`, `/oidc`, `/
 |---|---|
 | `pnpm typecheck` | Type-check every package |
 | `pnpm test` | Real-HTTP API tests (OIDC, admin, webmail, calendar, CalDAV/CardDAV), real IMAP/SMTP client tests, worker backup test — all on PGlite |
-| `pnpm build` | Build web, API and worker bundles |
+| `pnpm build` | Build the web apps (one bundle per app, plus `all`), the API, worker, mail server and mail-store |
+| `pnpm --filter @forge/mail test:remote-store` | Run the mail tests through a real mail-store service |
 | `pnpm db:generate` | Generate a SQL migration after editing `packages/db/src/schema.ts` |
 
 ## Layout
 
 ```
 apps/
-  api/        Fastify API + oidc-provider + Socket.IO + CalDAV/CardDAV; serves the web client
+  api/        Fastify back-end services (FORGE_SERVICES=directory|mail|calendar|contacts|tasks|all), oidc-provider, Socket.IO, CalDAV/CardDAV; gateway generator
   worker/     BullMQ worker: outbound mail delivery, backups, scheduled maintenance
-  mailserver/ SMTP (25/587/465) and IMAP (143/993) listeners
-  web/      React + Vite + Tailwind SPA: portal, sign-in, setup wizard, admin center
+  mailserver/ SMTP (25/587/465) and IMAP (143/993) listeners (FORGE_MAIL_ROLE=smtp|imap)
+  mailstore/  Mailbox storage service (content-addressed raw messages over authenticated HTTP)
+  web/      React + Vite + Tailwind web apps (portal, mail, calendar, contacts, tasks, admin), built one bundle per app; serve.mjs serves one app per container
 packages/
   db/       Drizzle schema, migrations, Postgres/PGlite connection
   auth/     RBAC permissions & roles, argon2id, TOTP + recovery codes, JWT verification
@@ -74,7 +100,7 @@ packages/
   mail/     Mail engine: MIME parsing, mailbox store, delivery, rules, spam, DKIM, IMAP & SMTP servers
   calendar/ iCalendar/vCard handling, calendar & contact storage, iTIP scheduling, free/busy
   ui/       Shared React components (buttons, dialogs, tables, app launcher, theming)
-docker/     Dockerfile and Caddyfile
+docker/     Dockerfile, gateway/Caddyfile (generated) and the optional TLS Caddyfile
 ```
 
 ## Architecture
@@ -246,6 +272,14 @@ The organisation lists apply to mail from outside. A person's block list overrid
 - **Testing:** *Test connection* checks that it can connect and sign in; *Send* delivers a test message through the relay.
 - **Failures:** if the relay is unreachable or rejects the login, messages are deferred and retried rather than bounced. The error is shown in the delivery queue.
 - **Environment relay:** `FORGE_SMTP_RELAY` still works and is used when the admin smarthost is off, or for domains outside its list.
+
+**Features.** Admin → Organisation → *Features* switches optional products on and off for the whole organisation: ForgeMail, ForgeCalendar, ForgeContacts and ForgeTasks. ForgeDirectory is always on.
+
+- **Hidden in the web apps:** a product that is off disappears from the launcher, the home page and the admin sidebar, and opening its app shows a "turned off" notice.
+- **Refused by the services:** its API answers `403 feature_disabled`, and its CalDAV/CardDAV collections are hidden.
+- **ForgeMail off:** mail apps can't sign in over IMAP or SMTP, and mail from outside is refused with a bounce. Calendar invitations and task requests between colleagues still work.
+- **ForgeTasks off:** flagging an email no longer creates a task.
+- **Nothing is deleted:** switching a product back on restores everything. Every container sees a change within a few seconds, and changes are audited.
 
 **Sessions and devices.** Admin → ForgeDirectory → *Sign-in & security* sets two timeouts:
 

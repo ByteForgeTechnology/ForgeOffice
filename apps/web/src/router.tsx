@@ -1,39 +1,19 @@
-import { createBrowserRouter, Navigate, useLocation, useParams } from 'react-router';
-import { AdminLayout } from './layouts/AdminLayout';
+import { useEffect } from 'react';
+import { createBrowserRouter, Navigate, useLocation, useParams, type RouteObject } from 'react-router';
+import { PageSpinner } from '@forge/ui';
 import { RequireAuth, Root } from './layouts/Root';
 import { Shell } from './layouts/Shell';
-import { AccountPage } from './pages/Account';
-import { CallbackPage } from './pages/Callback';
-import { ComingSoonPage } from './pages/ComingSoon';
-import { HomePage } from './pages/Home';
 import { NotFoundPage } from './pages/NotFound';
-import { MailPage } from './pages/mail/Mail';
-import { MailSettingsPage } from './pages/mail/MailSettings';
-import { CalendarPage } from './pages/calendar/Calendar';
-import { ContactsPage } from './pages/contacts/Contacts';
-import { TasksPage } from './pages/tasks/Tasks';
-import { AppDetailPage, AppsPage } from './pages/admin/Apps';
-import { MailAdminPage } from './pages/admin/MailAdmin';
-import { ResourcesPage } from './pages/admin/Resources';
-import { SharedMailboxesPage } from './pages/admin/SharedMailboxes';
-import { TransportRulesPage } from './pages/admin/TransportRules';
-import { SenderListsPage } from './pages/admin/SenderLists';
-import { SignatureEditorPage, SignaturesPage } from './pages/admin/Signatures';
-import { SearchPage } from './pages/Search';
-import { SetupPage } from './pages/Setup';
-import { SignedOutPage } from './pages/SignedOut';
-import { SignInPage } from './pages/SignIn';
-import { AuditPage } from './pages/admin/Audit';
-import { DashboardPage } from './pages/admin/Dashboard';
-import { DomainsPage } from './pages/admin/Domains';
-import { GroupDetailPage } from './pages/admin/GroupDetail';
-import { GroupsPage } from './pages/admin/Groups';
-import { QueuePage } from './pages/admin/Queue';
-import { RolesPage } from './pages/admin/Roles';
-import { DirectorySecurityPage, MailOrgSettingsPage, SettingsPage } from './pages/admin/Settings';
-import { UserDetailPage } from './pages/admin/UserDetail';
-import { UsersPage } from './pages/admin/Users';
+import { appForPath, servesPath, WEB_APP } from './lib/web-app';
 
+/*
+ * Each web app is its own bundle, served by its own container (see
+ * docker-compose.yml): portal (home, account, sign-in), mail, calendar,
+ * contacts, tasks and admin. __FORGE_APP__ is replaced at build time, so the
+ * conditions below are constant and the other apps' pages are left out of
+ * the bundle. Development and all-in-one builds ("all") include everything.
+ */
+declare const __FORGE_APP__: string;
 
 /** Old admin URLs → their new home (":id" is carried over). */
 const LEGACY_ADMIN_PATHS: Record<string, string> = {
@@ -60,14 +40,104 @@ function LegacyRedirect({ to }: { to: string }) {
   return <Navigate to={`/admin/${to.replace(':id', id ?? '')}${search}`} replace />;
 }
 
+/** A path that belongs to another app: load that app (its own container) through the gateway. */
+function OtherAppOrNotFound() {
+  const { pathname, search, hash } = useLocation();
+  const elsewhere = !servesPath(pathname);
+  useEffect(() => {
+    if (elsewhere) window.location.assign(pathname + search + hash);
+  }, [elsewhere, pathname, search, hash]);
+  return elsewhere ? <PageSpinner /> : <NotFoundPage />;
+}
+
+/** Lazy page: `page(() => import('./pages/x'), 'XPage')`. */
+const page =
+  <M extends Record<string, unknown>>(load: () => Promise<M>, name: keyof M): RouteObject['lazy'] =>
+  async () => ({ Component: (await load())[name] as React.ComponentType });
+
+// Pages outside the signed-in shell (sign-in, setup) belong to the portal.
+const publicRoutes: RouteObject[] =
+  __FORGE_APP__ === 'all' || __FORGE_APP__ === 'portal'
+    ? [
+        { path: '/setup', lazy: page(() => import('./pages/Setup'), 'SetupPage') },
+        { path: '/interaction/:uid', lazy: page(() => import('./pages/SignIn'), 'SignInPage') },
+        { path: '/auth/callback', lazy: page(() => import('./pages/Callback'), 'CallbackPage') },
+        { path: '/signed-out', lazy: page(() => import('./pages/SignedOut'), 'SignedOutPage') },
+      ]
+    : [];
+
+const portal: RouteObject[] =
+  __FORGE_APP__ === 'all' || __FORGE_APP__ === 'portal'
+    ? [
+        { index: true, lazy: page(() => import('./pages/Home'), 'HomePage') },
+        { path: 'search', lazy: page(() => import('./pages/Search'), 'SearchPage') },
+        { path: 'account', lazy: page(() => import('./pages/Account'), 'AccountPage') },
+        { path: 'apps/:app', lazy: page(() => import('./pages/ComingSoon'), 'ComingSoonPage') },
+      ]
+    : [];
+
+const mail: RouteObject[] =
+  __FORGE_APP__ === 'all' || __FORGE_APP__ === 'mail'
+    ? [
+        { path: 'mail', lazy: page(() => import('./pages/mail/Mail'), 'MailPage') },
+        { path: 'mail/settings', lazy: page(() => import('./pages/mail/MailSettings'), 'MailSettingsPage') },
+      ]
+    : [];
+
+const calendar: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'calendar' ? [{ path: 'calendar', lazy: page(() => import('./pages/calendar/Calendar'), 'CalendarPage') }] : [];
+const contacts: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'contacts' ? [{ path: 'contacts', lazy: page(() => import('./pages/contacts/Contacts'), 'ContactsPage') }] : [];
+const tasks: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'tasks' ? [{ path: 'tasks', lazy: page(() => import('./pages/tasks/Tasks'), 'TasksPage') }] : [];
+
+const admin: RouteObject[] =
+  __FORGE_APP__ === 'all' || __FORGE_APP__ === 'admin'
+    ? [
+        {
+          path: 'admin',
+          lazy: page(() => import('./layouts/AdminLayout'), 'AdminLayout'),
+          children: [
+            { index: true, lazy: page(() => import('./pages/admin/Dashboard'), 'DashboardPage') },
+            { path: 'queues/:name', lazy: page(() => import('./pages/admin/Queue'), 'QueuePage') },
+            // ForgeDirectory
+            { path: 'directory/users', lazy: page(() => import('./pages/admin/Users'), 'UsersPage') },
+            { path: 'directory/users/:id', lazy: page(() => import('./pages/admin/UserDetail'), 'UserDetailPage') },
+            { path: 'directory/groups', lazy: page(() => import('./pages/admin/Groups'), 'GroupsPage') },
+            { path: 'directory/groups/:id', lazy: page(() => import('./pages/admin/GroupDetail'), 'GroupDetailPage') },
+            { path: 'directory/roles', lazy: page(() => import('./pages/admin/Roles'), 'RolesPage') },
+            { path: 'directory/security', lazy: page(() => import('./pages/admin/Settings'), 'DirectorySecurityPage') },
+            { path: 'directory/apps', lazy: page(() => import('./pages/admin/Apps'), 'AppsPage') },
+            { path: 'directory/apps/:id', lazy: page(() => import('./pages/admin/Apps'), 'AppDetailPage') },
+            // ForgeMail
+            { path: 'mail/shared-mailboxes', lazy: page(() => import('./pages/admin/SharedMailboxes'), 'SharedMailboxesPage') },
+            { path: 'mail/flow', lazy: page(() => import('./pages/admin/MailAdmin'), 'MailAdminPage') },
+            { path: 'mail/transport-rules', lazy: page(() => import('./pages/admin/TransportRules'), 'TransportRulesPage') },
+            { path: 'mail/sender-lists', lazy: page(() => import('./pages/admin/SenderLists'), 'SenderListsPage') },
+            { path: 'mail/signatures', lazy: page(() => import('./pages/admin/Signatures'), 'SignaturesPage') },
+            { path: 'mail/signatures/:id', lazy: page(() => import('./pages/admin/Signatures'), 'SignatureEditorPage') },
+            { path: 'mail/settings', lazy: page(() => import('./pages/admin/Settings'), 'MailOrgSettingsPage') },
+            // ForgeCalendar
+            { path: 'calendar/rooms', lazy: page(() => import('./pages/admin/Resources'), 'ResourcesPage') },
+            // Organisation
+            { path: 'organisation/settings', lazy: page(() => import('./pages/admin/Settings'), 'SettingsPage') },
+            { path: 'organisation/features', lazy: page(() => import('./pages/admin/Settings'), 'FeaturesPage') },
+            { path: 'organisation/domains', lazy: page(() => import('./pages/admin/Domains'), 'DomainsPage') },
+            { path: 'organisation/audit', lazy: page(() => import('./pages/admin/Audit'), 'AuditPage') },
+            // Addresses from before the admin center was grouped by product.
+            ...Object.entries(LEGACY_ADMIN_PATHS).map(([from, to]) => ({ path: from, element: <LegacyRedirect to={to} /> })),
+          ],
+        },
+      ]
+    : [];
+
+/** Paths outside the shell that this bundle doesn't serve (e.g. /signed-out in the mail app). */
+const elsewhere: RouteObject[] = WEB_APP === 'all' || WEB_APP === 'portal' ? [] : [{ path: '/setup' }, { path: '/interaction/:uid' }, { path: '/auth/callback' }, { path: '/signed-out' }].map((r) => ({ ...r, element: <OtherAppOrNotFound /> }));
+
 export const router = createBrowserRouter([
   {
     element: <Root />,
+    hydrateFallbackElement: <PageSpinner />,
     children: [
-      { path: '/setup', element: <SetupPage /> },
-      { path: '/interaction/:uid', element: <SignInPage /> },
-      { path: '/auth/callback', element: <CallbackPage /> },
-      { path: '/signed-out', element: <SignedOutPage /> },
+      ...publicRoutes,
+      ...elsewhere,
       {
         element: (
           <RequireAuth>
@@ -75,51 +145,18 @@ export const router = createBrowserRouter([
           </RequireAuth>
         ),
         children: [
-          { index: true, element: <HomePage /> },
-          { path: 'search', element: <SearchPage /> },
-          { path: 'account', element: <AccountPage /> },
-          { path: 'apps/:app', element: <ComingSoonPage /> },
-          { path: 'mail', element: <MailPage /> },
-          { path: 'mail/settings', element: <MailSettingsPage /> },
-          { path: 'calendar', element: <CalendarPage /> },
-          { path: 'contacts', element: <ContactsPage /> },
-          { path: 'tasks', element: <TasksPage /> },
-          {
-            path: 'admin',
-            element: <AdminLayout />,
-            children: [
-              { index: true, element: <DashboardPage /> },
-              { path: 'queues/:name', element: <QueuePage /> },
-              // ForgeDirectory
-              { path: 'directory/users', element: <UsersPage /> },
-              { path: 'directory/users/:id', element: <UserDetailPage /> },
-              { path: 'directory/groups', element: <GroupsPage /> },
-              { path: 'directory/groups/:id', element: <GroupDetailPage /> },
-              { path: 'directory/roles', element: <RolesPage /> },
-              { path: 'directory/security', element: <DirectorySecurityPage /> },
-              { path: 'directory/apps', element: <AppsPage /> },
-              { path: 'directory/apps/:id', element: <AppDetailPage /> },
-              // ForgeMail
-              { path: 'mail/shared-mailboxes', element: <SharedMailboxesPage /> },
-              { path: 'mail/flow', element: <MailAdminPage /> },
-              { path: 'mail/transport-rules', element: <TransportRulesPage /> },
-              { path: 'mail/sender-lists', element: <SenderListsPage /> },
-              { path: 'mail/signatures', element: <SignaturesPage /> },
-              { path: 'mail/signatures/:id', element: <SignatureEditorPage /> },
-              { path: 'mail/settings', element: <MailOrgSettingsPage /> },
-              // ForgeCalendar
-              { path: 'calendar/rooms', element: <ResourcesPage /> },
-              // Organisation
-              { path: 'organisation/settings', element: <SettingsPage /> },
-              { path: 'organisation/domains', element: <DomainsPage /> },
-              { path: 'organisation/audit', element: <AuditPage /> },
-              // Addresses from before the admin center was grouped by product.
-              ...Object.entries(LEGACY_ADMIN_PATHS).map(([from, to]) => ({ path: from, element: <LegacyRedirect to={to} /> })),
-            ],
-          },
-          { path: '*', element: <NotFoundPage /> },
+          ...portal,
+          ...mail,
+          ...calendar,
+          ...contacts,
+          ...tasks,
+          ...admin,
+          // The home page lives in the portal app.
+          ...(WEB_APP !== 'all' && WEB_APP !== 'portal' ? [{ index: true, element: <OtherAppOrNotFound /> }] : []),
+          { path: '*', element: <OtherAppOrNotFound /> },
         ],
       },
     ],
   },
 ]);
+

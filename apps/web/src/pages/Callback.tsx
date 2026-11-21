@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { Alert, Button, PageSpinner } from '@forge/ui';
 import { signInRedirect, userManager } from '../lib/auth';
 import { AuthCard } from '../components/AuthCard';
+import { goTo } from '../lib/web-app';
 
 export function CallbackPage() {
   const navigate = useNavigate();
@@ -16,7 +17,8 @@ export function CallbackPage() {
       .signinCallback()
       .then((user) => {
         const returnTo = (user?.state as { returnTo?: string } | undefined)?.returnTo;
-        navigate(returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/', { replace: true });
+        // The app they were heading to may be another bundle (another container).
+        goTo(returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/', navigate, { replace: true });
       })
       .catch((err: Error) => setError(err.message));
   }, [navigate]);

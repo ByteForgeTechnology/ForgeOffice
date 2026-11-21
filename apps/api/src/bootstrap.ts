@@ -10,6 +10,7 @@ import { BlobStore } from '@forge/storage';
 import { createMailContext, ensureDkimKey, startMailProtocols } from '@forge/mail';
 import { domains } from '@forge/db';
 import { buildApp } from './app';
+import { runsAll } from './services';
 import type { AppConfig } from './config';
 import type { AppContext, Queues } from './context';
 import { loadSigningKeys } from './oidc/keys';
@@ -21,15 +22,24 @@ import { getPrimaryOrg } from './services/directory';
 
 /** Wire up every dependency, build the Fastify app and return start/stop handles. */
 export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
-  for (const v of Object.values(config.volumes)) await mkdir(v.path, { recursive: true, mode: v.key === 'certs' ? 0o700 : 0o750 });
+  const directory = config.services.has('directory');
+  const split = !runsAll(config.services);
+  // In a split install each container mounts only the volumes it needs.
+  for (const v of Object.values(config.volumes)) await mkdir(v.path, { recursive: true, mode: v.key === 'certs' ? 0o700 : 0o750 }).catch((err) => {
+    if (!split) throw err;
+  });
+  logger.info({ services: [...config.services] }, 'starting ForgeOffice services');
 
   const secret = await resolveMasterSecret(config.volumes.certs.path, config.secret);
   const keys = deriveKeys(secret);
   const signing = await loadSigningKeys(config.volumes.certs.path);
 
   const dbHandle = await connectDatabase(config.databaseUrl);
-  logger.info({ driver: dbHandle.driver }, 'running database migrations');
-  await dbHandle.migrate(config.migrationsDir);
+  // The directory service owns the schema; the other services start after it (compose health checks).
+  if (config.migrate) {
+    logger.info({ driver: dbHandle.driver }, 'running database migrations');
+    await dbHandle.migrate(config.migrationsDir);
+  }
 
   const redis = config.redisUrl ? createRedis(config.redisUrl) : null;
   if (redis) redis.on('error', (err) => logger.warn({ err: err.message }, 'redis connection error'));
@@ -43,11 +53,12 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
 
   const events = new EventEmitter();
   const org = await getPrimaryOrg(dbHandle.db);
-  const setupToken = org?.setupCompletedAt ? null : await resolveSetupToken(config.volumes.certs.path, config.setupToken);
+  const setupToken = org?.setupCompletedAt || !directory ? null : await resolveSetupToken(config.volumes.certs.path, config.setupToken);
 
   const mail = await createMailContext({
     db: dbHandle.db,
     mailDir: config.volumes.mail.path,
+    storeUrl: config.mail.storeUrl,
     bus,
     events,
     deliveryQueue: queues?.['mail-delivery'] ?? null,
@@ -62,7 +73,7 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
     },
   });
   // Every domain gets a DKIM key so outbound mail is signed from day one.
-  for (const d of await dbHandle.db.select().from(domains)) await ensureDkimKey(mail, d).catch((err) => logger.warn({ err, domain: d.name }, 'could not create DKIM key'));
+  if (config.services.has('mail')) for (const d of await dbHandle.db.select().from(domains)) await ensureDkimKey(mail, d).catch((err) => logger.warn({ err, domain: d.name }, 'could not create DKIM key'));
 
   const ctx: AppContext = {
     config,
@@ -83,7 +94,7 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
 
   await loadSessionPolicy(dbHandle.db);
   startSessionPolicyRefresh(dbHandle.db, logger);
-  const forge = createProvider(ctx, logger);
+  const forge = directory ? createProvider(ctx, logger) : null;
   const app = await buildApp(ctx, forge, { logger });
   let realtime: ReturnType<typeof attachRealtime> | null = null;
   let protocols: Awaited<ReturnType<typeof startMailProtocols>> | null = null;
@@ -95,8 +106,8 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
     forge,
     async start() {
       await app.listen({ host: config.host, port: config.port });
-      realtime = attachRealtime(app.server, ctx, logger);
-      if (redis) stopHeartbeat = startHeartbeat(redis, { service: 'api', version: config.version });
+      if (directory) realtime = attachRealtime(app.server, ctx, logger);
+      if (redis) stopHeartbeat = startHeartbeat(redis, { service: split ? [...config.services].join('+') : 'api', version: config.version });
       if (config.mail.embed) {
         protocols = await startMailProtocols(mail, {
           ports: { ...config.mail.ports, host: config.host },

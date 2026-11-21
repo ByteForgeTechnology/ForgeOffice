@@ -1,0 +1,1 @@
+ALTER TABLE "organizations" ADD COLUMN "features" jsonb DEFAULT '{"mail":true,"calendar":true,"contacts":true,"tasks":true}'::jsonb NOT NULL;

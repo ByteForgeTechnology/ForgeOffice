@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CircleCheck, CircleX, ImageUp, PlugZap, Send, Trash2 } from 'lucide-react';
-import { Alert, Button, Card, CardBody, CardHeader, Field, Input, PageHeader, PageSpinner, Select, Switch, Textarea, useToast } from '@forge/ui';
+import { BookUser, Calendar, CircleCheck, CircleX, FolderOpen, ImageUp, ListTodo, Mail, MessagesSquare, PlugZap, Send, Trash2, Users, type LucideIcon } from 'lucide-react';
+import { Alert, Badge, Button, Card, CardBody, CardHeader, Dialog, Field, Input, PageHeader, PageSpinner, Select, Switch, Textarea, cn, useToast } from '@forge/ui';
 import { api, errorMessage } from '../../lib/api';
 import { readFileAsDataUrl, useBranding, useCan } from '../../lib/hooks';
-import type { Org } from '../../lib/types';
+import { FEATURE_NAMES, type Feature, type Org } from '../../lib/types';
 
 const GiB = 1024 ** 3;
 
@@ -395,6 +395,126 @@ export function MailOrgSettingsPage() {
       </Card>
     </SettingsForm>
     <SmarthostCard />
+    </div>
+  );
+}
+
+const PRODUCTS: { feature: Feature | null; name: string; icon: LucideIcon; summary: string; whenOff?: string[]; comingSoon?: string }[] = [
+  { feature: null, name: 'ForgeDirectory', icon: Users, summary: 'People, groups, sign-in and the admin center. Everything else depends on it, so it is always on.' },
+  {
+    feature: 'mail',
+    name: 'ForgeMail',
+    icon: Mail,
+    summary: 'Email: webmail, IMAP and SMTP for mail apps, shared mailboxes, transport rules and signatures.',
+    whenOff: [
+      'Webmail and the mail admin pages are hidden.',
+      'Mail apps can no longer sign in over IMAP or SMTP.',
+      'Mail from outside the organisation is refused (senders get a bounce).',
+      'Calendar invitations and task requests between colleagues still work.',
+    ],
+  },
+  {
+    feature: 'calendar',
+    name: 'ForgeCalendar',
+    icon: Calendar,
+    summary: 'Calendars, meetings, rooms and free/busy, in the web app and on phones and computers (CalDAV).',
+    whenOff: ['The Calendar app, room admin and calendar sync (CalDAV) are unavailable.', 'Task lists keep syncing if ForgeTasks is on.'],
+  },
+  {
+    feature: 'contacts',
+    name: 'ForgeContacts',
+    icon: BookUser,
+    summary: 'Personal and shared address books and the organisation directory, in the web app and on devices (CardDAV).',
+    whenOff: ['The People app and contact sync (CardDAV) are unavailable.', 'Address suggestions when writing mail still work.'],
+  },
+  {
+    feature: 'tasks',
+    name: 'ForgeTasks',
+    icon: ListTodo,
+    summary: 'To-do lists, flagged email and assigned tasks, in the web app and in task apps on devices.',
+    whenOff: ['The Tasks app and task-list sync are unavailable.', 'Flagging an email keeps the flag but no longer creates a task.'],
+  },
+  { feature: null, name: 'ForgeDrive', icon: FolderOpen, summary: 'Files, libraries and intranet sites.', comingSoon: 'phase 3' },
+  { feature: null, name: 'ForgeTeam', icon: MessagesSquare, summary: 'Chat, channels and meetings.', comingSoon: 'phase 4' },
+];
+
+/** Organisation → Features: switch optional products on and off. */
+export function FeaturesPage() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const canManage = useCan('org:manage');
+  const org = useQuery({ queryKey: ['admin', 'org'], queryFn: () => api<{ org: Org }>('/api/v1/admin/org') });
+  const [confirm, setConfirm] = useState<(typeof PRODUCTS)[number] | null>(null);
+  const save = useMutation({
+    mutationFn: (change: Partial<Record<Feature, boolean>>) => api<{ org: Org }>('/api/v1/admin/org', { method: 'PATCH', body: { features: change } }),
+    onSuccess: (r, change) => {
+      const [f, on] = Object.entries(change)[0] as [Feature, boolean];
+      toast.success(`${FEATURE_NAMES[f]} is now ${on ? 'on' : 'off'}`);
+      setConfirm(null);
+      qc.setQueryData(['admin', 'org'], r);
+      void qc.invalidateQueries({ queryKey: ['me'] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  if (!org.data) return <PageSpinner />;
+  const flags = org.data.org.features;
+
+  return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader title="Features" description="Choose which ForgeOffice products your organisation uses. Switching one off hides it everywhere and stops its sync; nothing is deleted, and switching it back on restores everything." />
+      <div className="space-y-3">
+        {PRODUCTS.map((p) => {
+          const on = p.feature ? flags[p.feature] : !p.comingSoon;
+          return (
+            <Card key={p.name}>
+              <CardBody className="flex items-start gap-4">
+                <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-lg', on ? 'bg-brand/10 text-brand' : 'bg-zinc-100 text-zinc-400 dark:bg-zinc-800')}>
+                  <p.icon className="size-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-center gap-2 font-medium">
+                    {p.name}
+                    {!p.feature && !p.comingSoon && <Badge tone="info">Always on</Badge>}
+                    {p.comingSoon && <Badge>Coming in {p.comingSoon}</Badge>}
+                    {p.feature && !on && <Badge tone="warning">Off</Badge>}
+                  </p>
+                  <p className="mt-0.5 text-sm text-zinc-500">{p.summary}</p>
+                </div>
+                {p.feature && (
+                  <Switch
+                    label={<span className="sr-only">{p.name}</span>}
+                    checked={on}
+                    disabled={!canManage || save.isPending}
+                    onChange={(v) => (v ? save.mutate({ [p.feature!]: true }) : setConfirm(p))}
+                  />
+                )}
+              </CardBody>
+            </Card>
+          );
+        })}
+      </div>
+      {confirm?.feature && (
+        <Dialog
+          open
+          onClose={() => setConfirm(null)}
+          title={`Turn off ${confirm.name}?`}
+          footer={
+            <>
+              <Button onClick={() => setConfirm(null)}>Cancel</Button>
+              <Button variant="danger" loading={save.isPending} onClick={() => save.mutate({ [confirm.feature!]: false })}>
+                Turn off
+              </Button>
+            </>
+          }
+        >
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {confirm.whenOff?.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+            <li>No data is deleted. Switching it back on restores everything.</li>
+          </ul>
+        </Dialog>
+      )}
     </div>
   );
 }

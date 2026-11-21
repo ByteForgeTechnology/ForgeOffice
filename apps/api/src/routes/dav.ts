@@ -22,7 +22,7 @@ import {
   UidConflictError,
   type CalendarAccess,
 } from '@forge/calendar';
-import { addressBooks, calendarObjects, calendars, contacts, organizations, orm, users, type Calendar, type User } from '@forge/db';
+import { addressBooks, calendarObjects, calendars, contacts, featureEnabled, featureFlags, organizations, orm, users, type Calendar, type User } from '@forge/db';
 import { applyFlagTaskChange, authenticateProtocol } from '@forge/mail';
 import type { AppContext } from '../context';
 import { taskScheduling } from './tasks';
@@ -249,8 +249,16 @@ export function davRoutes(app: App, ctx: AppContext) {
 
     if (parts[1] && parts[1] !== user.id) return reply.code(403).send();
 
-    if (parts[0] === 'calendars') return calendarsHandler(req, reply, user, parts.slice(2), depth, body);
-    if (parts[0] === 'addressbooks') return addressBookHandler(req, reply, user, parts.slice(2), depth, body);
+    if (parts[0] === 'calendars') {
+      // Calendars need ForgeCalendar and task lists ForgeTasks (Admin → Organisation → Features).
+      const flags = await featureFlags(db);
+      if (!flags.calendar && !flags.tasks) return reply.code(403).send();
+      return calendarsHandler(req, reply, user, parts.slice(2), depth, body);
+    }
+    if (parts[0] === 'addressbooks') {
+      if (!(await featureEnabled(db, 'contacts'))) return reply.code(403).send();
+      return addressBookHandler(req, reply, user, parts.slice(2), depth, body);
+    }
     return reply.code(404).send();
   };
 
@@ -278,7 +286,8 @@ export function davRoutes(app: App, ctx: AppContext) {
     await ensureDefaultCalendar(db, user);
     await ensureTaskLists(db, user);
     // Calendars first, then task lists.
-    const visible = (await accessibleCalendars(db, user.id, 'all')).filter((c) => c.access !== 'freebusy').sort((a, b) => Number(a.kind === 'tasks') - Number(b.kind === 'tasks'));
+    const flags = await featureFlags(db);
+    const visible = (await accessibleCalendars(db, user.id, 'all')).filter((c) => c.access !== 'freebusy' && (c.kind === 'tasks' ? flags.tasks : flags.calendar)).sort((a, b) => Number(a.kind === 'tasks') - Number(b.kind === 'tasks'));
     const home = calHome(user);
     const wanted = requestedProps(body);
 

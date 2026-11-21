@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { featureEnabled } from '@forge/db';
 import tls from 'node:tls';
 import { mailboxes, messages, orm, type Mailbox, type Message, type User } from '@forge/db';
 import type { MailContext } from '../context';
@@ -600,6 +601,7 @@ class ImapSession {
       await new Promise((r) => setTimeout(r, 1000));
       return this.send(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials. If two-step verification is on, use an app password.`);
     }
+    if (!(await featureEnabled(this.ctx.db, 'mail'))) return this.send(`${tag} NO [UNAVAILABLE] ForgeMail is turned off for your organisation`);
     this.user = user;
     await ensureMailboxes(this.ctx, user.id);
     this.grants = await accessibleMailboxes(this.ctx, user.id);

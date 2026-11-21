@@ -1,5 +1,5 @@
 import { Type } from 'typebox';
-import { organizations, orm } from '@forge/db';
+import { ALL_FEATURES_ON, FEATURE_NAMES, organizations, orm, resetFeatureCache } from '@forge/db';
 import type { AppContext } from '../../context';
 import { badRequest, notFound } from '../../errors';
 import { authenticate, requirePermission } from '../../plugins/auth';
@@ -43,6 +43,13 @@ export function adminOrgRoutes(app: App, ctx: AppContext) {
           sessionMaxHours: Type.Optional(Type.Integer({ minimum: 1, maximum: 90 * 24 })),
           /** Sign out after inactivity (15 minutes to 30 days), or null for never. */
           sessionIdleMinutes: Type.Optional(Type.Union([Type.Integer({ minimum: 15, maximum: 30 * 24 * 60 }), Type.Null()])),
+          /** Switch optional products on or off (ForgeDirectory cannot be switched off). */
+          features: Type.Optional(
+            Type.Object(
+              { mail: Type.Optional(Type.Boolean()), calendar: Type.Optional(Type.Boolean()), contacts: Type.Optional(Type.Boolean()), tasks: Type.Optional(Type.Boolean()) },
+              { additionalProperties: false },
+            ),
+          ),
           undoSendSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 60 })),
           mailMaxMessageBytes: Type.Optional(Type.Integer({ minimum: 1024 * 1024, maximum: 150 * 1024 * 1024 })),
         }),
@@ -54,7 +61,17 @@ export function adminOrgRoutes(app: App, ctx: AppContext) {
       const maxHours = req.body.sessionMaxHours ?? current.sessionMaxHours;
       const idle = req.body.sessionIdleMinutes === undefined ? current.sessionIdleMinutes : req.body.sessionIdleMinutes;
       if (idle && idle > maxHours * 60) throw badRequest('The inactivity timeout must be shorter than the session length');
-      const [updated] = await db.update(organizations).set(req.body).where(eq(organizations.id, current.id)).returning();
+      const { features, ...rest } = req.body;
+      const [updated] = await db
+        .update(organizations)
+        .set({ ...rest, ...(features ? { features: { ...ALL_FEATURES_ON, ...current.features, ...features } } : {}) })
+        .where(eq(organizations.id, current.id))
+        .returning();
+      if (features) {
+        resetFeatureCache();
+        for (const [f, on] of Object.entries(features)) if (on !== current.features[f as keyof typeof current.features])
+          await ctx.audit.fromRequest(req, { action: on ? 'org.feature_enabled' : 'org.feature_disabled', targetType: 'organization', targetId: current.id, targetLabel: FEATURE_NAMES[f as keyof typeof FEATURE_NAMES] });
+      }
       const changes = Object.fromEntries(
         Object.keys(req.body).map((k) => [k, { from: current[k as keyof typeof current], to: updated![k as keyof typeof updated] }]),
       );

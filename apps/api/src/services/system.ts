@@ -1,4 +1,6 @@
 import { access } from 'node:fs/promises';
+import { PORTAL, WEB_APPS } from '../gateway';
+import { runsAll } from '../services';
 import { loadavg, totalmem, freemem } from 'node:os';
 import { QUEUE_INFO, QUEUE_NAMES, VOLUME_SCAN_KEY, listHeartbeats, withTimeout, type QueueName, type VolumeScan } from '@forge/events';
 import { diskUsage } from '@forge/storage';
@@ -29,7 +31,7 @@ export async function serviceHealth(ctx: AppContext): Promise<ServiceHealth[]> {
   const out: ServiceHealth[] = [
     {
       key: 'api',
-      name: 'API & identity provider',
+      name: runsAll(ctx.config.services) ? 'API & identity provider' : 'Directory service (sign-in, admin)',
       state: 'up',
       detail: `Node ${process.version} · uptime ${Math.round(process.uptime())}s · RSS ${Math.round(mem.rss / 1048576)} MiB`,
     },
@@ -53,13 +55,25 @@ export async function serviceHealth(ctx: AppContext): Promise<ServiceHealth[]> {
     out.push({ key: 'redis', name: 'Redis', state: ms > 200 ? 'degraded' : 'up', latencyMs: ms });
     const beats = await withTimeout(listHeartbeats(redis), 2_000, 'heartbeat scan');
     const workers = beats.filter((b) => b.service === 'worker');
-    const mailservers = beats.filter((b) => b.service === 'mailserver');
-    out.push({
-      key: 'mailserver',
-      name: 'Mail server (SMTP/IMAP)',
-      state: ctx.config.mail.embed ? 'up' : mailservers.length ? 'up' : 'down',
-      detail: ctx.config.mail.embed ? 'Embedded in the API process' : mailservers.length ? `${mailservers.length} instance(s)` : 'No mail server heartbeat in the last 30 seconds',
-    });
+    const beat = (key: string, name: string, services: string[]) => {
+      const found = beats.filter((b) => services.includes(b.service));
+      out.push({ key, name, state: found.length ? 'up' : 'down', detail: found.length ? `${found.length} instance(s)` : 'No heartbeat in the last 30 seconds', instances: found.map((w) => ({ instance: w.instance, lastSeen: w.lastSeen, startedAt: w.startedAt, version: w.version })) });
+    };
+    if (runsAll(ctx.config.services)) {
+      const mailservers = beats.filter((b) => ['mailserver', 'smtp', 'imap'].includes(b.service));
+      out.push({
+        key: 'mailserver',
+        name: 'Mail server (SMTP/IMAP)',
+        state: ctx.config.mail.embed ? 'up' : mailservers.length ? 'up' : 'down',
+        detail: ctx.config.mail.embed ? 'Embedded in the API process' : mailservers.length ? `${mailservers.length} instance(s)` : 'No mail server heartbeat in the last 30 seconds',
+      });
+    } else {
+      // One container per service: each reports its own heartbeat.
+      for (const [svc, name] of [['mail', 'Mail service (webmail back end)'], ['calendar', 'Calendar service (incl. CalDAV)'], ['contacts', 'Contacts service (incl. CardDAV)'], ['tasks', 'Tasks service']] as const)
+        if (!ctx.config.services.has(svc)) beat(svc, name, [svc]);
+      beat('smtp', 'SMTP (receive and submit mail)', ['smtp', 'mailserver']);
+      beat('imap', 'IMAP (mail apps)', ['imap', 'mailserver']);
+    }
     out.push({
       key: 'worker',
       name: 'Background worker',
@@ -70,6 +84,22 @@ export async function serviceHealth(ctx: AppContext): Promise<ServiceHealth[]> {
   } catch (err) {
     out.push({ key: 'redis', name: 'Redis', state: 'down', detail: (err as Error).message });
     out.push({ key: 'worker', name: 'Background worker', state: 'down', detail: 'Unknown (Redis unreachable)' });
+  }
+  // Containers without Redis: mailbox storage and the web apps answer /healthz.
+  if (!runsAll(ctx.config.services)) {
+    const probe = async (key: string, name: string, url: string) => {
+      try {
+        const { ms, value } = await timed(() => fetch(url, { signal: AbortSignal.timeout(2_000) }));
+        out.push({ key, name, state: value.ok ? 'up' : 'down', latencyMs: ms, ...(value.ok ? {} : { detail: `HTTP ${value.status}` }) });
+      } catch (err) {
+        out.push({ key, name, state: 'down', detail: (err as Error).message });
+      }
+    };
+    await Promise.all([
+      ...(ctx.config.mail.storeUrl ? [probe('mail-store', 'Mailbox storage (mail-store)', `${ctx.config.mail.storeUrl}/healthz`)] : []),
+      probe('portal-web', 'Web: portal and sign-in', `http://${PORTAL.host}:${PORTAL.port}/healthz`),
+      ...WEB_APPS.map((w) => probe(`${w.app}-web`, `Web: ${w.app}`, `http://${w.host}:${w.port}/healthz`)),
+    ]);
   }
   return out;
 }

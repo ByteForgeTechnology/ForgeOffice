@@ -1,4 +1,5 @@
 import type { Readable } from 'node:stream';
+import { featureEnabled } from '@forge/db';
 import { SMTPServer, type SMTPServerAddress, type SMTPServerAuthentication, type SMTPServerSession } from 'smtp-server';
 import { orm, users } from '@forge/db';
 import { normaliseAddress, parseAddressList, splitAddress } from '../addresses';
@@ -68,6 +69,8 @@ function inboundServer(o: SmtpServerOptions) {
       try {
         const addr = normaliseAddress(address.address);
         if (!(await isLocalDomain(ctx, splitAddress(addr).domain))) return cb(new SmtpError('5.7.1 Relaying denied', 554));
+        // ForgeMail switched off by an administrator: refuse mail from outside (the sender gets a bounce).
+        if (!(await featureEnabled(ctx.db, 'mail'))) return cb(new SmtpError('5.7.1 This organisation does not receive email here', 550));
         const route = await resolveRecipient(ctx, addr);
         if (!route) return cb(new SmtpError('5.1.1 No such user here', 550));
         if (route.kind === 'user') {
@@ -115,6 +118,7 @@ function submissionServer(o: SmtpServerOptions, secure: boolean) {
     async onAuth(auth: SMTPServerAuthentication, session: SMTPServerSession, cb: (err: Error | null | undefined, response?: { user?: unknown }) => void) {
       const user = await authenticateProtocol(ctx, auth.username ?? '', auth.password ?? '', { protocol: 'smtp', ip: session.remoteAddress }).catch(() => null);
       if (!user) return cb(new SmtpError('5.7.8 Authentication failed. If two-step verification is on, use an app password.', 535));
+      if (!(await featureEnabled(ctx.db, 'mail').catch(() => true))) return cb(new SmtpError('5.7.1 ForgeMail is turned off for your organisation', 535));
       cb(null, { user: user.id });
     },
     async onMailFrom(address: SMTPServerAddress, session: SMTPServerSession, cb: (err?: Error | null) => void) {

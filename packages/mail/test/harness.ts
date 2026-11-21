@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { SMTPServer } from 'smtp-server';
 import { hashPassword } from '@forge/auth';
 import { connectDatabase, domains, organizations, users, type DatabaseHandle } from '@forge/db';
-import { createMailContext, ensureDkimKey, startMailProtocols, type MailContext } from '../src';
+import { createMailStoreServer } from '@forge/storage';
+import { createMailContext, ensureDkimKey, mailStoreToken, startMailProtocols, type MailContext } from '../src';
 
 export interface Harness {
   handle: DatabaseHandle;
@@ -49,9 +50,18 @@ export async function startHarness(): Promise<Harness> {
   const [domain] = await handle.db.insert(domains).values({ orgId: org!.id, name: 'acme.test', isPrimary: true, verified: true, verificationToken: 'x' }).returning();
   const relay = await startRelay();
   const quiet = { info: () => {}, warn: () => {}, error: (o: unknown) => console.error(o) };
+  // FORGE_TEST_REMOTE_STORE=1 runs everything through a real mail-store service, as in production.
+  const masterSecret = 'test-master-secret-0123456789-abcdefghijklmnop';
+  let store: { url: string; close: () => Promise<void> } | null = null;
+  if (process.env.FORGE_TEST_REMOTE_STORE === '1') {
+    const server = createMailStoreServer({ root: join(root, 'store'), token: mailStoreToken(masterSecret) });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    store = { url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, close: () => new Promise((r) => server.close(() => r())) };
+  }
   const ctx = await createMailContext({
     db: handle.db,
     mailDir: join(root, 'mail'),
+    storeUrl: store?.url ?? null,
     bus: null,
     deliveryQueue: null,
     log: quiet,
@@ -61,6 +71,7 @@ export async function startHarness(): Promise<Harness> {
       certsDir: join(root, 'certs'),
       relayUrl: `smtp://127.0.0.1:${relay.port}?ignoreTLS=true`,
       disableAuthChecks: true,
+      masterSecret,
     },
   });
   await ensureDkimKey(ctx, domain!);
@@ -96,6 +107,7 @@ export async function startHarness(): Promise<Harness> {
     },
     async close() {
       await protocols.close();
+      await store?.close();
       await new Promise<void>((r) => relay.server.close(() => r()));
       await handle.close();
       await rm(root, { recursive: true, force: true });

@@ -12,6 +12,7 @@ import {
   type Organization,
   type User,
 } from '@forge/db';
+import { ALL_FEATURES_ON } from '@forge/db';
 import { badRequest, conflict, isUniqueViolation, notFound } from '../errors';
 
 const { and, asc, eq, inArray, sql } = orm;
@@ -241,6 +242,8 @@ export function serializeOrg(org: Organization) {
     requireMfa: org.requireMfa,
     sessionMaxHours: org.sessionMaxHours,
     sessionIdleMinutes: org.sessionIdleMinutes,
+    /** Optional products switched on (ForgeDirectory is always on). */
+    features: { ...ALL_FEATURES_ON, ...org.features },
     brandColor: org.brandColor,
     hasLogo: !!org.logoBlob,
     undoSendSeconds: org.undoSendSeconds,
