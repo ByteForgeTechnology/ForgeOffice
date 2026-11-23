@@ -1,6 +1,8 @@
 ![Logo](images/Logo.jpeg)   
 # ForgeOffice
 
+[![Build](https://github.com/ByteForgeTechnology/ForgeOffice/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ByteForgeTechnology/ForgeOffice/actions/workflows/build.yml) [![Latest release](https://img.shields.io/github/v/release/ByteForgeTechnology/ForgeOffice?label=release)](https://github.com/ByteForgeTechnology/ForgeOffice/releases/latest) [![License: MIT](https://img.shields.io/github/license/ByteForgeTechnology/ForgeOffice)](LICENSE)
+
 Self-hosted, subscription-free productivity suite.
 
 ## Introduction
