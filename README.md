@@ -1,3 +1,4 @@
+![Logo](images/Logo.jpeg)   
 # ForgeOffice
 
 Self-hosted, subscription-free productivity suite. Built so far:
