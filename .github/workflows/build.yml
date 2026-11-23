@@ -1,0 +1,82 @@
+# Builds a ForgeOffice release on every push to main: the Docker image and the installer zip
+# (build/build.sh), kept as a download on the run's page. Then records the build number it used
+# by committing build/BUILD_NUMBER back to main, so the next build gets the next number.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One build at a time, so two pushes close together never take the same build number.
+# A build already running is never cancelled (its number may be committed any moment).
+concurrency:
+  group: build-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write # to commit build/BUILD_NUMBER
+
+jobs:
+  build:
+    name: Build release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The commit that triggered this run may be older than main's latest build number
+      # (another build committed one since): always count on from the newest.
+      - name: Take the latest build number
+        run: |
+          git fetch origin main
+          git checkout origin/main -- build/BUILD_NUMBER
+          echo "Previous build: $(cat build/BUILD_NUMBER)"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        run: build/build.sh
+
+      - name: Find the release
+        id: release
+        run: |
+          zip=$(ls dist/forgeoffice-*.zip | head -n 1)
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$zip" .zip)" >> "$GITHUB_OUTPUT"
+          echo "number=$(cat build/BUILD_NUMBER)" >> "$GITHUB_OUTPUT"
+          echo "### ForgeOffice $(basename "$zip" .zip)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download the installer zip from **Artifacts** below ($(du -h "$zip" | cut -f1))." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the release
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.release.outputs.name }}
+          path: ${{ steps.release.outputs.zip }}
+          compression-level: 0 # already compressed
+          retention-days: 30
+
+      # Only after a successful build. Pushes made with the workflow's own token don't start
+      # another run, and [skip ci] makes sure of it.
+      - name: Commit the build number
+        env:
+          NUMBER: ${{ steps.release.outputs.number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git checkout -f -B ci-build-number origin/main
+            echo "$NUMBER" > build/BUILD_NUMBER
+            if git diff --quiet -- build/BUILD_NUMBER; then echo "Already recorded"; exit 0; fi
+            git add build/BUILD_NUMBER
+            git commit -m "Build ${NUMBER} [skip ci]"
+            git push origin HEAD:main && exit 0
+            echo "main moved on while committing; trying again"
+            sleep 5
+          done
+          exit 1
