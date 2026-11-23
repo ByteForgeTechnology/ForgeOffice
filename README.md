@@ -1,12 +1,26 @@
 ![Logo](images/Logo.jpeg)   
 # ForgeOffice
 
-Self-hosted, subscription-free productivity suite. Built so far:
+Self-hosted, subscription-free productivity suite.
+
+## Introduction
+
+I have been very inspired by the work of [Artcraft](https://github.com/storytold). I think the work they are doing is amazing and I wanted to do the same but instead of the desktop apps, I am taking on the managed services. Here is my first shot!
+
+> [!WARNING]
+> This project is very much pre-alpha, please be careful using this in production!
+
+## What I have done so far
 
 - **Phase 1 – Foundation, Identity & Unified Shell:** monorepo, OIDC identity provider, users/groups/RBAC, audit log, web portal and admin center.
 - **Phase 2 – ForgeMail:** SMTP and IMAP servers written in Node.js, webmail, server-side rules, auto-replies, quarantine, calendars and contacts with CalDAV/CardDAV, meeting rooms and free/busy.
 - **Phase 3 – ForgeDrive & ForgeSites:** file libraries with resumable uploads, de-duplicated storage, versions, a recycle bin, inherited permissions, sharing links, check-out, previews, full-text search, optional virus scanning (ClamAV) and Office editing (Euro-Office); intranet sites with pages, news and widgets.
 - **Phase 4 – ForgeTeam:** teams and channels (public and private), one-to-one and group chats, threads, reactions, mentions, markdown, files kept in Drive, presence synced with calls and the calendar, and audio/video meetings with screen sharing, guests (via a lobby) and recording, on a mediasoup SFU.
+
+## Still left todo
+- **Build containers and installers:** I plan on building a graphical (ish) installer that you can run in a bash command line. Here you will be able to select an express install that will install one copy of each role on the server or do a custom deployment where it will ask you what components you want to install and if you are deploying a new install or joining an existing one.
+- **ForgeManage:** A mobile device manager component that will allow you to control, patch, policy and deploy software. (Similar to Intune)
+- **Desktop client:** Build a desktop client that will sign in the user on a desktop and all the apps. It should include notifications from ForgeTeam.
 
 ## Quick start (Docker)
 
