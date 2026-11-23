@@ -38,6 +38,7 @@ import { mailRoutes } from './routes/mail';
 import { driveRoutes } from './routes/drive';
 import { drivePublicRoutes } from './routes/drive-public';
 import { siteRoutes } from './routes/sites';
+import { starRoutes } from './routes/stars';
 import { adminDriveRoutes } from './routes/admin/drive';
 import { DriveAccessError, DriveError, LockedError } from '@forge/drive';
 import type { App } from './types';
@@ -54,7 +55,7 @@ const SERVICE_ROUTES: Record<ServiceName, Registrar[]> = {
   calendar: [calendarRoutes, davRoutes],
   contacts: [contactRoutes, davRoutes],
   tasks: [taskRoutes],
-  drive: [driveRoutes, drivePublicRoutes, siteRoutes, adminDriveRoutes],
+  drive: [driveRoutes, drivePublicRoutes, siteRoutes, starRoutes, adminDriveRoutes],
 };
 
 /** Route groups that belong to an optional product (Admin → Organisation → Features). DAV checks per collection. */
@@ -71,6 +72,7 @@ const ROUTE_FEATURES = new Map<Registrar, Feature>([
   [driveRoutes, 'drive'],
   [drivePublicRoutes, 'drive'],
   [siteRoutes, 'drive'],
+  [starRoutes, 'drive'],
   [adminDriveRoutes, 'drive'],
 ]);
 

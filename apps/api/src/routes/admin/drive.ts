@@ -2,12 +2,13 @@ import { Type } from 'typebox';
 import { clamdPing } from '@forge/drive';
 import { DEFAULT_DRIVE_SETTINGS, driveItems, driveLibraries, groups, orm, organizations, sites, users } from '@forge/db';
 import type { AppContext } from '../../context';
-import { badRequest } from '../../errors';
+import { badRequest, notFound } from '../../errors';
 import { authenticate, requirePermission } from '../../plugins/auth';
 import type { App } from '../../types';
 import { driveSettings } from '../drive';
+import { deleteSite } from '../sites';
 
-const { asc, eq, sql } = orm;
+const { and, asc, eq, sql } = orm;
 
 /** Admin → ForgeDrive: policies, virus scanning / Office editing status, and storage by library. */
 export function adminDriveRoutes(app: App, ctx: AppContext) {
@@ -79,6 +80,9 @@ export function adminDriveRoutes(app: App, ctx: AppContext) {
         owner: users.displayName,
         group: groups.name,
         site: sites.name,
+        siteId: sites.id,
+        siteSlug: sites.slug,
+        disabledAt: driveLibraries.disabledAt,
         items: sql<number>`(select count(*)::int from ${driveItems} where ${driveItems.libraryId} = ${driveLibraries.id} and ${driveItems.deletedAt} is null)`,
         createdAt: driveLibraries.createdAt,
       })
@@ -90,4 +94,42 @@ export function adminDriveRoutes(app: App, ctx: AppContext) {
       .orderBy(asc(driveLibraries.kind), asc(driveLibraries.name));
     return { items: rows };
   });
+
+  // ---------------------------------------------------------------------------
+  // Sites: an administrator can turn a site off (nobody, its owners included,
+  // can open it or its documents until it is turned back on) or delete it.
+  // ---------------------------------------------------------------------------
+
+  const SiteParams = Type.Object({ id: Type.String({ format: 'uuid' }) });
+  const siteInOrg = async (orgId: string, id: string) => {
+    const [row] = await db.select({ site: sites, lib: driveLibraries }).from(sites).innerJoin(driveLibraries, eq(driveLibraries.id, sites.libraryId)).where(and(eq(sites.id, id), eq(sites.orgId, orgId))).limit(1);
+    if (!row) throw notFound('Site');
+    return row;
+  };
+
+  app.patch(
+    '/api/v1/admin/drive/sites/:id',
+    { preHandler: requirePermission(ctx, 'org:manage'), schema: { tags: ['admin: drive'], summary: 'Disable or re-enable a site (and its documents)', params: SiteParams, body: Type.Object({ disabled: Type.Boolean() }) } },
+    async (req) => {
+      const { site, lib } = await siteInOrg(req.principal!.orgId, req.params.id);
+      const disabled = req.body.disabled;
+      await db
+        .update(driveLibraries)
+        .set(disabled ? { disabledAt: lib.disabledAt ?? new Date(), disabledBy: lib.disabledBy ?? req.principal!.user!.id } : { disabledAt: null, disabledBy: null })
+        .where(eq(driveLibraries.id, lib.id));
+      await ctx.audit.fromRequest(req, { action: disabled ? 'sites.site_disabled' : 'sites.site_enabled', targetType: 'site', targetId: site.id, targetLabel: site.name });
+      return { id: site.id, disabled };
+    },
+  );
+
+  app.delete(
+    '/api/v1/admin/drive/sites/:id',
+    { preHandler: requirePermission(ctx, 'org:manage'), schema: { tags: ['admin: drive'], summary: 'Delete a site, its pages, lists and documents', params: SiteParams } },
+    async (req) => {
+      const { site, lib } = await siteInOrg(req.principal!.orgId, req.params.id);
+      await deleteSite(ctx, site);
+      await ctx.audit.fromRequest(req, { action: 'sites.site_deleted', targetType: 'site', targetId: site.id, targetLabel: site.name, metadata: { byAdmin: true, bytes: lib.usedBytes } });
+      return { ok: true };
+    },
+  );
 }

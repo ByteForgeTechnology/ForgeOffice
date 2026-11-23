@@ -1,8 +1,8 @@
 import type { Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { auditLog, messages, oidcPayloads, orm, organizations, transportRuleHits, userSessions, users, type Database } from '@forge/db';
-import { cleanupUploads, purgeExpired, type DriveContext } from '@forge/drive';
-import { expungeMessages, type MailContext } from '@forge/mail';
+import { cleanupUploads, purgeExpired, runStarNotifications, type DriveContext } from '@forge/drive';
+import { expungeMessages, sendSystemNotice, type MailContext } from '@forge/mail';
 import { VOLUME_SCAN_KEY, type JobData, type JobName, type VolumeScan } from '@forge/events';
 import { directorySize } from '@forge/storage';
 import type { WorkerConfig } from '../config';
@@ -58,6 +58,9 @@ export function createMaintenanceProcessor(db: Database, redis: Redis, config: W
         for (const org of await db.select({ id: organizations.id, s: organizations.driveSettings }).from(organizations)) purged += await purgeExpired(drive, org.s?.trashDays ?? 93, org.id);
         return { purged };
       }
+      case 'star-notifications':
+        // Changes to starred documents and list items, batched per person.
+        return runStarNotifications(db, { publicUrl: config.publicUrl, send: (email) => sendSystemNotice(mail, email).then(() => undefined), log: job.log ? { warn: (o, m) => void job.log(`${m ?? ''} ${JSON.stringify(o)}`) } : undefined });
       case 'cleanup-drive-uploads':
         return { removed: await cleanupUploads(drive) };
       case 'prune-backups':

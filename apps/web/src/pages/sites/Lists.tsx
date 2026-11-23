@@ -1,40 +1,30 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Columns3, Download, List as ListIcon, Plus, Search, Settings2, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, Columns3, Download, EyeOff, KanbanSquare, List as ListIcon, Plus, Search, Settings2, SlidersHorizontal, Table2, Trash2, X } from 'lucide-react';
 import { Alert, Avatar, Badge, Button, Dialog, EmptyState, Field, Input, PageSpinner, Select, Switch, Textarea, cn, formatRelative, useToast, type Tone } from '@forge/ui';
 import { api, errorMessage } from '../../lib/api';
+import { useMe } from '../../lib/hooks';
+import { StarButton } from '../../components/StarButton';
+import { FILTER_OPS, allColumns, applyView, columnById, displayText, groupItems, valueOf, type FilterOp, type ListColumn, type ListItem, type ListView as ViewDef, type People } from './list-views';
 
-export interface ListColumn {
-  id: string;
-  name: string;
-  type: 'text' | 'note' | 'number' | 'choice' | 'date' | 'boolean' | 'person' | 'link';
-  required?: boolean;
-  choices?: string[];
-  withTime?: boolean;
-}
+export type { ListColumn };
 interface ListInfo {
   id: string;
   name: string;
   description: string;
   columns: ListColumn[];
+  views: ViewDef[];
   itemCount?: number;
   updatedAt?: string;
 }
-interface ListItem {
-  id: string;
-  values: Record<string, unknown>;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-type People = Record<string, { name: string; email: string | null }>;
 interface ListData {
   list: ListInfo;
   canEdit: boolean;
   items: ListItem[];
   people: People;
+  /** Items you starred. */
+  starred: string[];
 }
 interface SiteRef {
   id: string;
@@ -58,30 +48,8 @@ const CHOICE_TONES: Tone[] = ['info', 'success', 'warning', 'danger', 'brand', '
 const listKey = (siteId: string, listId: string) => ['sites', 'list', siteId, listId];
 
 // ---------------------------------------------------------------------------
-// Values: display, sorting and CSV
+// Values: display and CSV
 // ---------------------------------------------------------------------------
-
-function formatDate(v: string, withTime?: boolean) {
-  const d = new Date(withTime ? v : `${v}T00:00:00`);
-  return withTime ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : d.toLocaleDateString(undefined, { dateStyle: 'medium' });
-}
-
-function plainValue(col: ListColumn, v: unknown, people: People): string {
-  if (v === undefined || v === null || v === '') return '';
-  if (col.type === 'boolean') return v ? 'Yes' : 'No';
-  if (col.type === 'person') return people[v as string]?.name ?? 'Unknown person';
-  if (col.type === 'date') return formatDate(v as string, col.withTime);
-  return String(v);
-}
-
-function sortValue(col: ListColumn, v: unknown, people: People): string | number {
-  if (v === undefined || v === null || v === '') return '';
-  if (col.type === 'number') return v as number;
-  if (col.type === 'choice') return col.choices?.indexOf(v as string) ?? 0;
-  if (col.type === 'boolean') return v ? 1 : 0;
-  if (col.type === 'date') return String(v);
-  return plainValue(col, v, people).toLowerCase();
-}
 
 function Value({ col, value, people }: { col: ListColumn; value: unknown; people: People }) {
   if (value === undefined || value === null || value === '') return <span className="text-zinc-400">—</span>;
@@ -112,66 +80,121 @@ function Value({ col, value, people }: { col: ListColumn; value: unknown; people
     case 'number':
       return <span className="tabular-nums">{(value as number).toLocaleString()}</span>;
     case 'date':
-      return <span className="whitespace-nowrap">{formatDate(value as string, col.withTime)}</span>;
+      return <span className="whitespace-nowrap">{displayText(col, value, people)}</span>;
     default:
       return <span>{String(value)}</span>;
   }
 }
 
-function exportCsv(data: ListData) {
+function exportCsv(name: string, columns: ListColumn[], items: ListItem[], people: People) {
   const cell = (s: string) => (/[",\n\r]/.test(s) || /^[=+\-@]/.test(s) ? `"${(/^[=+\-@]/.test(s) ? `'${s}` : s).replace(/"/g, '""')}"` : s);
-  const rows = [data.list.columns.map((c) => cell(c.name)).join(',')];
-  for (const i of data.items) rows.push(data.list.columns.map((c) => cell(plainValue(c, i.values[c.id], data.people))).join(','));
+  const rows = [columns.map((c) => cell(c.name)).join(',')];
+  for (const i of items) rows.push(columns.map((c) => cell(displayText(c, valueOf(i, c.id), people))).join(','));
   const blob = new Blob([`﻿${rows.join('\r\n')}\r\n`], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${data.list.name}.csv`;
+  a.download = `${name}.csv`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+/** Columns a view shows, in its order (unknown ids skipped). */
+const viewColumns = (list: ListInfo, view: ViewDef) => view.columns.map((id) => columnById(list.columns, id)).filter(Boolean) as ListColumn[];
+
 // ---------------------------------------------------------------------------
-// The list page
+// The list page: view tabs, then the view as a table or a board
 // ---------------------------------------------------------------------------
 
 export function ListView({ site, listId }: { site: SiteRef; listId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
+  const me = useMe();
+  const [params, setParams] = useSearchParams();
   const [filter, setFilter] = useState('');
-  const [sort, setSort] = useState<{ col: string; desc: boolean } | null>(null);
+  const [sort, setSort] = useState<{ column: string; desc: boolean } | null>(null);
   const [editing, setEditing] = useState<ListItem | 'new' | null>(null);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [viewEditor, setViewEditor] = useState<{ view: ViewDef; isNew: boolean } | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const q = useQuery({ queryKey: listKey(site.id, listId), queryFn: () => api<ListData>(`/api/v1/sites/${site.id}/lists/${listId}`) });
+  const views = q.data?.list.views ?? [];
+  const view = views.find((v) => v.id === params.get('view')) ?? views[0];
+  // Links in emails open an item: …/lists/<id>?item=<item id>
+  const linkedItem = params.get('item');
+  useEffect(() => {
+    const found = linkedItem && q.data?.items.find((i) => i.id === linkedItem);
+    if (!found) return;
+    setEditing(found);
+    setParams((p) => {
+      p.delete('item');
+      return p;
+    }, { replace: true });
+  }, [linkedItem, q.data, setParams]);
   useEffect(() => {
     setFilter('');
     setSort(null);
-  }, [listId]);
+    setCollapsed(new Set());
+  }, [listId, view?.id]);
 
   const rows = useMemo(() => {
-    if (!q.data) return [];
+    if (!q.data || !view) return [];
     const { list, items, people } = q.data;
+    const inView = applyView(view, list.columns, items, people, me.data?.user.id ?? null, sort);
     const needle = filter.trim().toLowerCase();
-    let out = needle ? items.filter((i) => list.columns.some((c) => plainValue(c, i.values[c.id], people).toLowerCase().includes(needle))) : items;
-    const col = sort && list.columns.find((c) => c.id === sort.col);
-    if (col) {
-      out = [...out].sort((a, b) => {
-        const x = sortValue(col, a.values[col.id], people);
-        const y = sortValue(col, b.values[col.id], people);
-        // Empty values last, whichever way round.
-        if (x === '' || y === '') return x === y ? 0 : x === '' ? 1 : -1;
-        const r = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
-        return sort!.desc ? -r : r;
-      });
-    }
-    return out;
-  }, [q.data, filter, sort]);
+    if (!needle) return inView;
+    const searchable = allColumns(list.columns);
+    return inView.filter((i) => searchable.some((c) => displayText(c, valueOf(i, c.id), people).toLowerCase().includes(needle)));
+  }, [q.data, view, filter, sort, me.data]);
+
+  const saveViews = useMutation({
+    mutationFn: (next: ViewDef[]) => api<{ list: ListInfo }>(`/api/v1/sites/${site.id}/lists/${listId}/views`, { method: 'PUT', body: { views: next } }),
+    onSuccess: (r) => qc.setQueryData<ListData>(listKey(site.id, listId), (d) => (d ? { ...d, list: { ...d.list, views: r.list.views } } : d)),
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const moveItem = useMutation({
+    mutationFn: ({ item, column, value }: { item: ListItem; column: string; value: string | null }) => api(`/api/v1/sites/${site.id}/lists/${listId}/items/${item.id}`, { method: 'PATCH', body: { values: { [column]: value } } }),
+    onMutate: ({ item, column, value }) =>
+      qc.setQueryData<ListData>(listKey(site.id, listId), (d) => (d ? { ...d, items: d.items.map((i) => (i.id === item.id ? { ...i, values: { ...i.values, [column]: value ?? undefined } } : i)) } : d)),
+    onError: (e) => toast.error(errorMessage(e)),
+    onSettled: () => void qc.invalidateQueries({ queryKey: listKey(site.id, listId) }),
+  });
 
   if (q.error) return <EmptyState icon={<ListIcon />} title="List not found" description="It may have been deleted." />;
-  if (!q.data) return <PageSpinner />;
+  if (!q.data || !view) return <PageSpinner />;
   const { list, canEdit, people } = q.data;
-  const shown = list.columns.slice(0, 8);
+  const shown = viewColumns(list, view);
+  const groupCol = view.layout === 'table' && view.groupBy ? columnById(list.columns, view.groupBy) : undefined;
+  const boardCol = view.layout === 'board' ? list.columns.find((c) => c.id === view.boardColumn && c.type === 'choice') : undefined;
+  const pickView = (id: string) => setParams(id === views[0]?.id ? {} : { view: id }, { replace: true });
+  const blankView = (): ViewDef => ({ id: '', name: '', layout: 'table', columns: list.columns.slice(0, 6).map((c) => c.id), sort: [], filters: [], groupBy: null, boardColumn: null });
+
+  const header = (c: ListColumn) => {
+    const active = sort ? sort.column === c.id : !view.sort.length ? false : view.sort[0]!.column === c.id;
+    const desc = sort ? sort.desc : view.sort[0]?.desc;
+    return (
+      <th key={c.id} className="border-b border-zinc-200 px-3 py-2 font-medium whitespace-nowrap dark:border-zinc-800" aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}>
+        <button type="button" className="inline-flex items-center gap-1 hover:text-brand" onClick={() => setSort(sort?.column === c.id ? (sort.desc ? null : { column: c.id, desc: true }) : { column: c.id, desc: false })}>
+          {c.name}
+          {active && (desc ? <ArrowDown className="size-3.5" /> : <ArrowUp className="size-3.5" />)}
+        </button>
+      </th>
+    );
+  };
+  const isStarred = (i: ListItem) => q.data!.starred.includes(i.id);
+  const row = (i: ListItem) => (
+    <tr key={i.id} className="group cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/70 dark:hover:bg-zinc-800/50" onClick={() => setEditing(i)}>
+      {shown.map((c, n) => (
+        <td key={c.id} className={cn('max-w-72 px-3 py-2 align-top', n === 0 && 'font-medium')}>
+          <Value col={c} value={valueOf(i, c.id)} people={people} />
+        </td>
+      ))}
+      <td className="w-8 py-1 pr-2 text-right align-top">
+        <StarButton kind="list_item" id={i.id} starred={isStarred(i)} name={String(i.values.title ?? 'this item')} className={cn(!isStarred(i) && 'opacity-0 group-hover:opacity-100 focus:opacity-100')} />
+      </td>
+    </tr>
+  );
 
   return (
     <div className="space-y-4">
@@ -186,16 +209,45 @@ export function ListView({ site, listId }: { site: SiteRef; listId: string }) {
           </Button>
         )}
       </div>
+
+      <div role="tablist" aria-label="Views" className="flex flex-wrap items-center gap-1 border-b border-zinc-200 dark:border-zinc-800">
+        {views.map((v, n) => (
+          <button
+            key={v.id}
+            type="button"
+            role="tab"
+            aria-selected={v.id === view.id}
+            onClick={() => pickView(v.id)}
+            className={cn('-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm', v.id === view.id ? 'border-brand font-medium text-brand' : 'border-transparent text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100')}
+          >
+            {v.layout === 'board' ? <KanbanSquare className="size-4" /> : <Table2 className="size-4" />}
+            {v.name}
+            {n === 0 && views.length > 1 && <span className="sr-only">(default)</span>}
+          </button>
+        ))}
+        {canEdit && (
+          <button type="button" onClick={() => setViewEditor({ view: blankView(), isNew: true })} className="inline-flex items-center gap-1 px-3 py-2 text-sm text-zinc-500 hover:text-brand">
+            <Plus className="size-4" /> Add view
+          </button>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-48 flex-1 sm:max-w-xs">
           <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-zinc-400" />
           <Input aria-label="Filter items" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter items" className="pl-9" />
         </div>
         <span className="text-sm text-zinc-500">
-          {rows.length === q.data.items.length ? `${q.data.items.length} items` : `${rows.length} of ${q.data.items.length} items`}
+          {rows.length === q.data.items.length ? `${rows.length} items` : `${rows.length} of ${q.data.items.length} items`}
+          {view.filters.length > 0 && ` · filtered by ${view.filters.length === 1 ? 'this view' : `${view.filters.length} conditions`}`}
         </span>
         <div className="ml-auto flex flex-wrap gap-2">
-          <Button size="sm" variant="ghost" icon={<Download className="size-4" />} onClick={() => exportCsv(q.data!)}>
+          {canEdit && (
+            <Button size="sm" variant="ghost" icon={<SlidersHorizontal className="size-4" />} onClick={() => setViewEditor({ view, isNew: false })}>
+              Edit view
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" icon={<Download className="size-4" />} onClick={() => exportCsv(`${list.name} - ${view.name}`, view.layout === 'board' ? allColumns(list.columns) : shown, rows, people)}>
             Export to CSV
           </Button>
           {canEdit && (
@@ -213,44 +265,94 @@ export function ListView({ site, listId }: { site: SiteRef; listId: string }) {
 
       {!q.data.items.length ? (
         <EmptyState icon={<ListIcon />} title="No items yet" description={canEdit ? 'Add the first item with “New item”.' : 'Nothing has been added to this list.'} />
+      ) : boardCol ? (
+        <Board
+          column={boardCol}
+          fields={shown.filter((c) => c.id !== 'title' && c.id !== boardCol.id)}
+          items={rows}
+          people={people}
+          canEdit={canEdit}
+          onOpen={setEditing}
+          onMove={(item, value) => moveItem.mutate({ item, column: boardCol.id, value })}
+        />
+      ) : !rows.length ? (
+        <EmptyState icon={<ListIcon />} title="Nothing in this view" description="No items match its filters." />
       ) : (
         <div className="overflow-x-auto rounded-xl bg-white shadow-sm ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800">
           <table className="w-full text-left text-sm">
             <thead>
               <tr>
-                {shown.map((c) => {
-                  const active = sort?.col === c.id;
-                  return (
-                    <th key={c.id} className="border-b border-zinc-200 px-3 py-2 font-medium whitespace-nowrap dark:border-zinc-800" aria-sort={active ? (sort!.desc ? 'descending' : 'ascending') : 'none'}>
-                      <button type="button" className="inline-flex items-center gap-1 hover:text-brand" onClick={() => setSort(active ? (sort!.desc ? null : { col: c.id, desc: true }) : { col: c.id, desc: false })}>
-                        {c.name}
-                        {active && (sort!.desc ? <ArrowDown className="size-3.5" /> : <ArrowUp className="size-3.5" />)}
-                      </button>
-                    </th>
-                  );
-                })}
-                <th className="border-b border-zinc-200 px-3 py-2 font-medium whitespace-nowrap text-zinc-500 dark:border-zinc-800">Modified</th>
+                {shown.map(header)}
+                <th className="w-8 border-b border-zinc-200 dark:border-zinc-800">
+                  <span className="sr-only">Starred</span>
+                </th>
               </tr>
             </thead>
-            <tbody>
-              {rows.map((i) => (
-                <tr key={i.id} className="cursor-pointer border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/70 dark:hover:bg-zinc-800/50" onClick={() => setEditing(i)}>
-                  {shown.map((c, n) => (
-                    <td key={c.id} className={cn('max-w-72 px-3 py-2 align-top', n === 0 && 'font-medium')}>
-                      <Value col={c} value={i.values[c.id]} people={people} />
-                    </td>
-                  ))}
-                  <td className="px-3 py-2 align-top whitespace-nowrap text-zinc-500">{formatRelative(i.updatedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
+            {groupCol ? (
+              groupItems(groupCol, rows, people).map((g) => {
+                const closed = collapsed.has(g.key);
+                return (
+                  <tbody key={g.key}>
+                    <tr className="bg-zinc-50 dark:bg-zinc-800/40">
+                      <td colSpan={shown.length + 1} className="px-3 py-1.5">
+                        <button
+                          type="button"
+                          aria-expanded={!closed}
+                          className="inline-flex items-center gap-1.5 text-sm font-medium"
+                          onClick={() => setCollapsed((s) => (s.has(g.key) ? new Set([...s].filter((k) => k !== g.key)) : new Set([...s, g.key])))}
+                        >
+                          {closed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
+                          {groupCol.name}: {g.label} <span className="font-normal text-zinc-500">({g.items.length})</span>
+                        </button>
+                      </td>
+                    </tr>
+                    {!closed && g.items.map(row)}
+                  </tbody>
+                );
+              })
+            ) : (
+              <tbody>{rows.map(row)}</tbody>
+            )}
           </table>
         </div>
       )}
-      {list.columns.length > shown.length && <p className="text-xs text-zinc-500">Open an item to see all {list.columns.length} columns.</p>}
+      {view.layout === 'board' && !boardCol && <Alert tone="warning">This board’s column no longer exists. Edit the view to choose another.</Alert>}
 
       {editing && <ItemDialog site={site} data={q.data} item={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
       {columnsOpen && <ColumnsDialog site={site} list={list} onClose={() => setColumnsOpen(false)} />}
+      {viewEditor && (
+        <ViewEditorDialog
+          list={list}
+          view={viewEditor.view}
+          isNew={viewEditor.isNew}
+          isDefault={!viewEditor.isNew && views[0]?.id === viewEditor.view.id}
+          saving={saveViews.isPending}
+          onClose={() => setViewEditor(null)}
+          onSave={(v, makeDefault) => {
+            // A new view has no id yet; the server assigns one.
+            const { id: _unsaved, ...fresh } = v;
+            let next: ViewDef[] = viewEditor.isNew ? [...views, fresh as ViewDef] : views.map((x) => (x.id === viewEditor.view.id ? v : x));
+            const target = viewEditor.isNew ? next[next.length - 1]! : next.find((x) => x.id === viewEditor.view.id)!;
+            if (makeDefault) next = [target, ...next.filter((x) => x !== target)];
+            saveViews.mutate(next, {
+              onSuccess: (r) => {
+                setViewEditor(null);
+                const saved = viewEditor.isNew ? r.list.views[makeDefault ? 0 : r.list.views.length - 1] : r.list.views.find((x) => x.id === viewEditor.view.id);
+                if (saved) pickView(makeDefault ? r.list.views[0]!.id : saved.id);
+              },
+            });
+          }}
+          onDelete={
+            views.length > 1 && !viewEditor.isNew
+              ? () =>
+                  saveViews.mutate(
+                    views.filter((x) => x.id !== viewEditor.view.id),
+                    { onSuccess: () => (setViewEditor(null), setParams({}, { replace: true })) },
+                  )
+              : undefined
+          }
+        />
+      )}
       {settingsOpen && (
         <ListSettingsDialog
           site={site}
@@ -264,6 +366,341 @@ export function ListView({ site, listId }: { site: SiteRef; listId: string }) {
         />
       )}
     </div>
+  );
+}
+
+/** Board layout: one column per choice; dragging a card changes the item's choice. */
+function Board({ column, fields, items, people, canEdit, onOpen, onMove }: { column: ListColumn; fields: ListColumn[]; items: ListItem[]; people: People; canEdit: boolean; onOpen: (i: ListItem) => void; onMove: (i: ListItem, value: string | null) => void }) {
+  const [over, setOver] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const lanes = [...(column.choices ?? []).map((c) => ({ key: c, label: c, value: c as string | null })), { key: '', label: `No ${column.name.toLowerCase()}`, value: null }];
+  const byLane = (v: string | null) => items.filter((i) => ((i.values[column.id] as string | undefined) ?? null) === v || (v === null && !column.choices?.includes(i.values[column.id] as string)));
+  return (
+    <div className="flex gap-3 overflow-x-auto pb-2">
+      {lanes.map((lane, n) => {
+        const cards = byLane(lane.value);
+        if (lane.value === null && !cards.length) return null;
+        return (
+          <section
+            key={lane.key}
+            aria-label={lane.label}
+            className={cn('flex w-72 shrink-0 flex-col rounded-xl bg-zinc-100 p-2 dark:bg-zinc-900', over === lane.key && 'ring-2 ring-brand')}
+            onDragOver={(e) => {
+              if (!canEdit || !dragging) return;
+              e.preventDefault();
+              setOver(lane.key);
+            }}
+            onDragLeave={() => setOver((o) => (o === lane.key ? null : o))}
+            onDrop={(e) => {
+              e.preventDefault();
+              setOver(null);
+              const item = items.find((i) => i.id === dragging);
+              if (item && ((item.values[column.id] as string | undefined) ?? null) !== lane.value) onMove(item, lane.value);
+              setDragging(null);
+            }}
+          >
+            <h3 className="mb-2 flex items-center gap-2 px-1 text-sm font-medium">
+              {lane.value !== null ? <Badge tone={CHOICE_TONES[n % CHOICE_TONES.length]}>{lane.label}</Badge> : <span className="text-zinc-500">{lane.label}</span>}
+              <span className="text-zinc-500">{cards.length}</span>
+            </h3>
+            <ul className="min-h-12 space-y-2">
+              {cards.map((i) => (
+                <li key={i.id}>
+                  <button
+                    type="button"
+                    draggable={canEdit}
+                    onDragStart={(e) => {
+                      setDragging(i.id);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', i.id);
+                    }}
+                    onDragEnd={() => setDragging(null)}
+                    onClick={() => onOpen(i)}
+                    className={cn('block w-full rounded-lg bg-white p-3 text-left text-sm shadow-sm ring-1 ring-zinc-200 hover:ring-brand dark:bg-zinc-800 dark:ring-zinc-700', canEdit && 'cursor-grab active:cursor-grabbing', dragging === i.id && 'opacity-50')}
+                  >
+                    <span className="block font-medium">{String(i.values.title ?? '')}</span>
+                    {fields.slice(0, 4).map((f) => {
+                      const v = valueOf(i, f.id);
+                      return v === undefined || v === null || v === '' ? null : (
+                        <span key={f.id} className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                          <span className="text-zinc-400">{f.name}:</span> <Value col={f} value={v} people={people} />
+                        </span>
+                      );
+                    })}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {canEdit && cards.length === 0 && <p className="px-1 py-3 text-center text-xs text-zinc-400">Drop items here</p>}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Create or change a view: layout, columns, sorting, filters, grouping. */
+function ViewEditorDialog({
+  list,
+  view,
+  isNew,
+  isDefault,
+  saving,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  list: ListInfo;
+  view: ViewDef;
+  isNew: boolean;
+  isDefault: boolean;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (v: ViewDef, makeDefault: boolean) => void;
+  onDelete?: () => void;
+}) {
+  const [v, setV] = useState<ViewDef>(() => structuredClone(view));
+  const [makeDefault, setMakeDefault] = useState(isDefault);
+  const cols = allColumns(list.columns);
+  const choiceCols = list.columns.filter((c) => c.type === 'choice');
+  const hidden = cols.filter((c) => !v.columns.includes(c.id));
+  const set = (patch: Partial<ViewDef>) => setV((x) => ({ ...x, ...patch }));
+  const moveCol = (i: number, by: number) => {
+    const next = [...v.columns];
+    [next[i], next[i + by]] = [next[i + by]!, next[i]!];
+    set({ columns: next });
+  };
+  const opsFor = (c?: ListColumn) => FILTER_OPS.filter((o) => o.types === 'all' || (c && o.types.includes(c.type)));
+  const valueInput = (f: ViewDef['filters'][number], i: number) => {
+    const c = columnById(list.columns, f.column);
+    if (!c || f.op === 'empty' || f.op === 'notEmpty') return null;
+    const change = (value: string | number | boolean) => set({ filters: v.filters.map((x, n) => (n === i ? { ...x, value } : x)) });
+    if (c.type === 'choice')
+      return (
+        <Select aria-label="Value" value={String(f.value ?? '')} onChange={(e) => change(e.target.value)} className="w-44">
+          <option value="">Choose…</option>
+          {c.choices?.map((o) => (
+            <option key={o}>{o}</option>
+          ))}
+        </Select>
+      );
+    if (c.type === 'boolean')
+      return (
+        <Select aria-label="Value" value={String(f.value ?? 'true')} onChange={(e) => change(e.target.value === 'true')} className="w-28">
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </Select>
+      );
+    if (c.type === 'person' && f.op !== 'contains')
+      return (
+        <Select aria-label="Value" value={String(f.value ?? '')} onChange={(e) => change(e.target.value)} className="w-44">
+          <option value="">Choose…</option>
+          <option value="[Me]">[Me] (whoever is looking)</option>
+        </Select>
+      );
+    if (c.type === 'date')
+      return (
+        <span className="inline-flex items-center gap-1">
+          <Input aria-label="Value" value={String(f.value ?? '')} onChange={(e) => change(e.target.value)} placeholder="[Today] or 2026-12-31" className="w-44" list="list-date-values" />
+        </span>
+      );
+    return <Input aria-label="Value" type={c.type === 'number' ? 'number' : 'text'} value={String(f.value ?? '')} onChange={(e) => change(c.type === 'number' ? Number(e.target.value) : e.target.value)} className="w-44" />;
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      size="lg"
+      title={isNew ? 'Add a view' : `Edit “${view.name}”`}
+      footer={
+        <>
+          {onDelete && (
+            <Button variant="ghost" className="mr-auto text-red-600" icon={<Trash2 className="size-4" />} onClick={() => window.confirm(`Delete the “${view.name}” view? The items stay in the list.`) && onDelete()}>
+              Delete view
+            </Button>
+          )}
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={saving} disabled={!v.name.trim() || (v.layout === 'board' && !v.boardColumn)} onClick={() => onSave({ ...v, name: v.name.trim() }, makeDefault)}>
+            {isNew ? 'Add view' : 'Save view'}
+          </Button>
+        </>
+      }
+    >
+      <datalist id="list-date-values">
+        <option value="[Today]" />
+        <option value="[Today]+7" />
+        <option value="[Today]-7" />
+        <option value="[Today]+30" />
+        <option value="[Today]-30" />
+      </datalist>
+      <div className="space-y-5">
+        <div className="flex flex-wrap gap-3">
+          <Field label="Name" htmlFor="ve-name">
+            <Input id="ve-name" value={v.name} onChange={(e) => set({ name: e.target.value })} placeholder="My open items" className="w-56" />
+          </Field>
+          <Field label="Show as" htmlFor="ve-layout">
+            <Select id="ve-layout" value={v.layout} onChange={(e) => set({ layout: e.target.value as ViewDef['layout'], boardColumn: v.boardColumn ?? choiceCols[0]?.id ?? null })} className="w-40">
+              <option value="table">Table</option>
+              <option value="board" disabled={!choiceCols.length}>
+                Board{!choiceCols.length ? ' (needs a Choice column)' : ''}
+              </option>
+            </Select>
+          </Field>
+          {v.layout === 'board' ? (
+            <Field label="Board columns from" htmlFor="ve-board">
+              <Select id="ve-board" value={v.boardColumn ?? ''} onChange={(e) => set({ boardColumn: e.target.value })} className="w-44">
+                {choiceCols.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ) : (
+            <Field label="Group by" htmlFor="ve-group">
+              <Select id="ve-group" value={v.groupBy ?? ''} onChange={(e) => set({ groupBy: e.target.value || null })} className="w-44">
+                <option value="">None</option>
+                {cols
+                  .filter((c) => c.type !== 'note')
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+              </Select>
+            </Field>
+          )}
+        </div>
+
+        <section>
+          <h3 className="mb-2 text-sm font-medium">{v.layout === 'board' ? 'Fields on cards' : 'Columns'}</h3>
+          <ul className="divide-y divide-zinc-100 rounded-lg ring-1 ring-zinc-200 dark:divide-zinc-800 dark:ring-zinc-800">
+            {v.columns.map((id, i) => {
+              const c = columnById(list.columns, id);
+              if (!c) return null;
+              return (
+                <li key={id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                  <span className="flex-1">{c.name}</span>
+                  <button type="button" aria-label={`Move ${c.name} up`} disabled={i === 0} onClick={() => moveCol(i, -1)} className="rounded p-1 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800">
+                    <ChevronUp className="size-4" />
+                  </button>
+                  <button type="button" aria-label={`Move ${c.name} down`} disabled={i === v.columns.length - 1} onClick={() => moveCol(i, 1)} className="rounded p-1 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800">
+                    <ChevronDown className="size-4" />
+                  </button>
+                  <button type="button" aria-label={`Hide ${c.name}`} disabled={v.columns.length === 1} onClick={() => set({ columns: v.columns.filter((x) => x !== id) })} className="rounded p-1 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800">
+                    <EyeOff className="size-4" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {hidden.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm">
+              <span className="text-zinc-500">Show:</span>
+              {hidden.map((c) => (
+                <button key={c.id} type="button" onClick={() => set({ columns: [...v.columns, c.id] })} className="rounded-full px-2.5 py-0.5 ring-1 ring-zinc-300 hover:ring-brand dark:ring-zinc-700">
+                  + {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <h3 className="mb-2 text-sm font-medium">Sort</h3>
+          <div className="space-y-2">
+            {[0, 1].map((n) => {
+              const s = v.sort[n];
+              if (n === 1 && !v.sort[0]) return null;
+              return (
+                <div key={n} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="w-16 text-zinc-500">{n === 0 ? 'Sort by' : 'then by'}</span>
+                  <Select
+                    aria-label={n === 0 ? 'Sort by' : 'Then by'}
+                    value={s?.column ?? ''}
+                    onChange={(e) => {
+                      const next = [...v.sort];
+                      if (e.target.value) next[n] = { column: e.target.value, desc: s?.desc ?? false };
+                      else next.splice(n);
+                      set({ sort: next });
+                    }}
+                    className="w-48"
+                  >
+                    <option value="">{n === 0 ? 'The order items were added' : 'Nothing else'}</option>
+                    {cols
+                      .filter((c) => c.type !== 'note')
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                  </Select>
+                  {s && (
+                    <Select aria-label="Direction" value={s.desc ? 'desc' : 'asc'} onChange={(e) => set({ sort: v.sort.map((x, i) => (i === n ? { ...x, desc: e.target.value === 'desc' } : x)) })} className="w-40">
+                      <option value="asc">Ascending (A–Z, 1–9, oldest)</option>
+                      <option value="desc">Descending (Z–A, 9–1, newest)</option>
+                    </Select>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="mb-1 text-sm font-medium">Filter</h3>
+          <p className="mb-2 text-xs text-zinc-500">Show only items where all of these are true. Use [Me] for the person looking, and [Today], [Today]+7 or [Today]-30 for dates.</p>
+          <div className="space-y-2">
+            {v.filters.map((f, i) => {
+              const c = columnById(list.columns, f.column);
+              return (
+                <div key={i} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="w-10 text-zinc-500">{i === 0 ? 'Where' : 'and'}</span>
+                  <Select
+                    aria-label="Column"
+                    value={f.column}
+                    onChange={(e) => {
+                      const nc = columnById(list.columns, e.target.value);
+                      set({ filters: v.filters.map((x, n) => (n === i ? { column: e.target.value, op: opsFor(nc).some((o) => o.op === x.op) ? x.op : 'eq', value: nc?.type === 'person' ? '[Me]' : nc?.type === 'boolean' ? true : '' } : x)) });
+                    }}
+                    className="w-40"
+                  >
+                    {cols.map((col) => (
+                      <option key={col.id} value={col.id}>
+                        {col.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Select aria-label="Condition" value={f.op} onChange={(e) => set({ filters: v.filters.map((x, n) => (n === i ? { ...x, op: e.target.value as FilterOp } : x)) })} className="w-48">
+                    {opsFor(c).map((o) => (
+                      <option key={o.op} value={o.op}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </Select>
+                  {valueInput(f, i)}
+                  <button type="button" aria-label="Remove condition" onClick={() => set({ filters: v.filters.filter((_, n) => n !== i) })} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                    <X className="size-4" />
+                  </button>
+                </div>
+              );
+            })}
+            {v.filters.length < 10 && (
+              <Button size="sm" variant="ghost" icon={<Plus className="size-4" />} onClick={() => set({ filters: [...v.filters, { column: 'title', op: 'contains', value: '' }] })}>
+                Add condition
+              </Button>
+            )}
+          </div>
+        </section>
+
+        {!isDefault && (
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} /> Make this the default view (shown first, and on pages)
+          </label>
+        )}
+      </div>
+    </Dialog>
   );
 }
 
@@ -371,7 +808,16 @@ function ItemDialog({ site, data, item, onClose }: { site: SiteRef; data: ListDa
       open
       onClose={onClose}
       size="lg"
-      title={item ? String(item.values.title ?? 'Item') : 'New item'}
+      title={
+        item ? (
+          <span className="flex items-center gap-2">
+            <span className="min-w-0 truncate">{String(item.values.title ?? 'Item')}</span>
+            <StarButton kind="list_item" id={item.id} starred={data.starred.includes(item.id)} name={String(item.values.title ?? 'this item')} />
+          </span>
+        ) : (
+          'New item'
+        )
+      }
       description={item ? `Created ${formatRelative(item.createdAt)}${item.createdBy && people[item.createdBy] ? ` by ${people[item.createdBy]!.name}` : ''} · modified ${formatRelative(item.updatedAt)}${item.updatedBy && people[item.updatedBy] ? ` by ${people[item.updatedBy]!.name}` : ''}` : list.name}
       footer={
         canEdit ? (
@@ -697,17 +1143,22 @@ export function CreateListDialog({ site, onClose }: { site: SiteRef; onClose: ()
 // Widget for site pages
 // ---------------------------------------------------------------------------
 
-export function ListWidget({ site, listId }: { site: SiteRef; listId: string | null }) {
-  const q = useQuery({ queryKey: [...listKey(site.id, listId ?? ''), 'widget'], queryFn: () => api<ListData>(`/api/v1/sites/${site.id}/lists/${listId}?limit=10`), enabled: !!listId, retry: false });
+export function ListWidget({ site, listId, viewId }: { site: SiteRef; listId: string | null; viewId?: string | null }) {
+  const me = useMe();
+  const q = useQuery({ queryKey: listKey(site.id, listId ?? ''), queryFn: () => api<ListData>(`/api/v1/sites/${site.id}/lists/${listId}`), enabled: !!listId, retry: false });
   if (!listId) return <p className="text-sm text-zinc-500">Edit the page and choose a list.</p>;
   if (q.error) return <p className="text-sm text-zinc-500">This list no longer exists.</p>;
   if (!q.data) return <PageSpinner />;
-  const { list, items, people } = q.data;
-  const cols = list.columns.slice(0, 4);
+  const { list, people } = q.data;
+  const view = list.views.find((v) => v.id === viewId) ?? list.views[0]!;
+  const all = applyView(view, list.columns, q.data.items, people, me.data?.user.id ?? null);
+  const items = all.slice(0, 10);
+  const cols = (view.layout === 'board' && view.boardColumn ? [columnById(list.columns, 'title'), columnById(list.columns, view.boardColumn), ...viewColumns(list, view).filter((c) => c.id !== 'title')] : viewColumns(list, view)).filter(Boolean).slice(0, 4) as ListColumn[];
+  const href = `/sites/${site.slug}/lists/${list.id}${view.id !== list.views[0]?.id ? `?view=${view.id}` : ''}`;
   return (
     <div>
       {!items.length ? (
-        <p className="text-sm text-zinc-500">No items yet.</p>
+        <p className="text-sm text-zinc-500">Nothing to show.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -725,7 +1176,7 @@ export function ListWidget({ site, listId }: { site: SiteRef; listId: string | n
                 <tr key={i.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/70">
                   {cols.map((c) => (
                     <td key={c.id} className="max-w-56 py-1.5 pr-3 align-top">
-                      <Value col={c} value={i.values[c.id]} people={people} />
+                      <Value col={c} value={valueOf(i, c.id)} people={people} />
                     </td>
                   ))}
                 </tr>
@@ -734,8 +1185,8 @@ export function ListWidget({ site, listId }: { site: SiteRef; listId: string | n
           </table>
         </div>
       )}
-      <Link to={`/sites/${site.slug}/lists/${list.id}`} className="mt-2 inline-block text-sm text-brand hover:underline">
-        {list.itemCount && list.itemCount > items.length ? `All ${list.itemCount} items` : 'Open the list'}
+      <Link to={href} className="mt-2 inline-block text-sm text-brand hover:underline">
+        {all.length > items.length ? `All ${all.length} items` : 'Open the list'}
       </Link>
     </div>
   );

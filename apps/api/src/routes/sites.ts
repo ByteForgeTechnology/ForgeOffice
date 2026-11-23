@@ -5,7 +5,7 @@ import type { AppContext } from '../context';
 import { badRequest, forbidden, notFound } from '../errors';
 import { authenticate } from '../plugins/auth';
 import type { App } from '../types';
-import { siteListRoutes } from './site-lists';
+import { siteListRoutes, viewsOf } from './site-lists';
 
 const { and, asc, desc, eq, inArray, isNotNull, isNull } = orm;
 const IdParams = Type.Object({ id: Type.String({ format: 'uuid' }) });
@@ -38,6 +38,15 @@ const homeContent = (name: string) => ({
  * site's document library holds its files, and the library's permissions are
  * the site's permissions (members, owners, or everyone in the organisation).
  */
+/** Delete a site: its pages, lists and its library with every file in it. */
+export async function deleteSite(ctx: AppContext, site: Site) {
+  // Release stored file content before the library (and everything in it) goes.
+  const roots = await ctx.db.select().from(driveItems).where(and(eq(driveItems.libraryId, site.libraryId), isNull(driveItems.parentId)));
+  for (const r of roots) await purge(ctx.drive, r);
+  await ctx.db.delete(sites).where(eq(sites.id, site.id));
+  await ctx.db.delete(driveLibraries).where(eq(driveLibraries.id, site.libraryId));
+}
+
 export function siteRoutes(app: App, ctx: AppContext) {
   const { db } = ctx;
   app.addHook('preHandler', authenticate(ctx));
@@ -143,7 +152,7 @@ export function siteRoutes(app: App, ctx: AppContext) {
       .from(sitePages)
       .where(and(eq(sitePages.siteId, site.id), eq(sitePages.isNews, false)))
       .orderBy(desc(sitePages.isHome), asc(sitePages.sortOrder), asc(sitePages.title));
-    const lists = await db.select({ id: siteLists.id, name: siteLists.name }).from(siteLists).where(eq(siteLists.siteId, site.id)).orderBy(asc(siteLists.name));
+    const lists = (await db.select().from(siteLists).where(eq(siteLists.siteId, site.id)).orderBy(asc(siteLists.name))).map((l) => ({ id: l.id, name: l.name, views: viewsOf(l).map((v) => ({ id: v.id, name: v.name })) }));
     return { site: serialiseSite(site, role), pages, lists };
   });
 
@@ -169,11 +178,7 @@ export function siteRoutes(app: App, ctx: AppContext) {
 
   app.delete('/api/v1/sites/:id', { schema: { tags: ['sites'], summary: 'Delete a site, its pages and its documents', params: IdParams } }, async (req) => {
     const { site } = await requireSite(req, { id: req.params.id }, 'owner');
-    // Release stored file content before the library (and everything in it) goes.
-    const roots = await db.select().from(driveItems).where(and(eq(driveItems.libraryId, site.libraryId), isNull(driveItems.parentId)));
-    for (const r of roots) await purge(ctx.drive, r);
-    await db.delete(sites).where(eq(sites.id, site.id));
-    await db.delete(driveLibraries).where(eq(driveLibraries.id, site.libraryId));
+    await deleteSite(ctx, site);
     await ctx.audit.fromRequest(req, { action: 'sites.site_deleted', targetType: 'site', targetId: site.id, targetLabel: site.name });
     return { ok: true };
   });

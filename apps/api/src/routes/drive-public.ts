@@ -30,14 +30,14 @@ export function drivePublicRoutes(app: App, ctx: AppContext) {
     const claims = verifyToken<{ l: string }>(key(), token, 'share');
     if (!claims) throw new HttpError(404, 'This link does not exist', 'link_not_found');
     const [row] = await db
-      .select({ link: driveShareLinks, item: driveItems, orgId: driveLibraries.orgId, owner: users.displayName })
+      .select({ link: driveShareLinks, item: driveItems, orgId: driveLibraries.orgId, libraryDisabled: driveLibraries.disabledAt, owner: users.displayName })
       .from(driveShareLinks)
       .innerJoin(driveItems, eq(driveItems.id, driveShareLinks.itemId))
       .innerJoin(driveLibraries, eq(driveLibraries.id, driveItems.libraryId))
       .leftJoin(users, eq(users.id, driveShareLinks.createdBy))
       .where(eq(driveShareLinks.id, claims.l))
       .limit(1);
-    if (!row || row.link.revokedAt || row.item.deletedAt) throw new HttpError(404, 'This link no longer works', 'link_revoked');
+    if (!row || row.link.revokedAt || row.item.deletedAt || row.libraryDisabled) throw new HttpError(404, 'This link no longer works', 'link_revoked');
     if (row.link.expiresAt && row.link.expiresAt < new Date()) throw new HttpError(410, 'This link has expired', 'link_expired');
     if (!(await driveSettings(ctx, row.orgId)).externalSharing) throw new HttpError(403, 'External sharing is turned off', 'sharing_disabled');
     return row;

@@ -49,6 +49,7 @@ interface Page {
 interface SiteListRef {
   id: string;
   name: string;
+  views: { id: string; name: string }[];
 }
 
 const SiteContext = createContext<SiteInfo | null>(null);
@@ -209,7 +210,7 @@ const ForgeWidget = Node.create({
   atom: true,
   draggable: true,
   addAttributes() {
-    return { widget: { default: 'news' }, title: { default: '' }, itemId: { default: null }, calendarId: { default: null }, listId: { default: null }, width: { default: null } };
+    return { widget: { default: 'news' }, title: { default: '' }, itemId: { default: null }, calendarId: { default: null }, listId: { default: null }, viewId: { default: null }, width: { default: null } };
   },
   parseHTML() {
     return [{ tag: 'div[data-forge-widget]' }];
@@ -224,7 +225,7 @@ const ForgeWidget = Node.create({
 
 function WidgetView({ node, editor, deleteNode }: NodeViewProps) {
   const site = useContext(SiteContext);
-  const { widget, title, itemId, calendarId, listId } = node.attrs as { widget: string; title: string; itemId: string | null; calendarId: string | null; listId: string | null };
+  const { widget, title, itemId, calendarId, listId, viewId } = node.attrs as { widget: string; title: string; itemId: string | null; calendarId: string | null; listId: string | null; viewId: string | null };
   return (
     <NodeViewWrapper className={cn('my-4', editor.isEditable && 'rounded-xl ring-2 ring-dashed ring-zinc-300 dark:ring-zinc-700')}>
       {editor.isEditable && (
@@ -245,7 +246,7 @@ function WidgetView({ node, editor, deleteNode }: NodeViewProps) {
             {widget === 'library' && <SiteLibrary site={site} />}
             {widget === 'activity' && <Activity path={`/api/v1/drive/libraries/${site.libraryId}/activity`} compact />}
             {widget === 'calendar' && <SiteCalendar calendarId={calendarId} />}
-            {widget === 'list' && <ListWidget site={site} listId={listId} />}
+            {widget === 'list' && <ListWidget site={site} listId={listId} viewId={viewId} />}
           </section>
         )}
       </div>
@@ -491,13 +492,34 @@ function PageEditor({ site, lists, page, onDone }: { site: SiteInfo; lists: Site
           ))}
         </Select>
         {lists.length > 0 && (
-          <Select aria-label="Add a list" className="h-8 w-44 py-0 text-sm" value="" onChange={(e) => e.target.value && insert({ widget: 'list', title: lists.find((l) => l.id === e.target.value)?.name ?? 'List', listId: e.target.value })}>
+          <Select
+            aria-label="Add a list"
+            className="h-8 w-52 py-0 text-sm"
+            value=""
+            onChange={(e) => {
+              const [lid, vid] = e.target.value.split(':');
+              const l = lists.find((x) => x.id === lid);
+              const v = l?.views.find((x) => x.id === vid);
+              if (l) insert({ widget: 'list', title: v && v.id !== l.views[0]?.id ? `${l.name}: ${v.name}` : l.name, listId: l.id, viewId: v?.id ?? null });
+            }}
+          >
             <option value="">List…</option>
-            {lists.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
+            {lists.map((l) =>
+              l.views.length > 1 ? (
+                <optgroup key={l.id} label={l.name}>
+                  {l.views.map((v, n) => (
+                    <option key={v.id} value={`${l.id}:${v.id}`}>
+                      {v.name}
+                      {n === 0 ? ' (default)' : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : (
+                <option key={l.id} value={`${l.id}:`}>
+                  {l.name}
+                </option>
+              ),
+            )}
           </Select>
         )}
         <Button size="sm" variant="ghost" icon={<ImageIcon className="size-4" />} onClick={() => imageInput.current?.click()}>

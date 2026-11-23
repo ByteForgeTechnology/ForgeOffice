@@ -33,6 +33,7 @@ async function main() {
   await maintenance.upsertJobScheduler('prune-audit-log', { pattern: '45 3 * * *', tz }, { name: 'prune-audit-log', data: { olderThanDays: config.auditRetentionDays } });
   await maintenance.upsertJobScheduler('purge-drive-trash', { pattern: '15 4 * * *', tz }, { name: 'purge-drive-trash', data: {} });
   await maintenance.upsertJobScheduler('cleanup-drive-uploads', { every: 60 * 60_000 }, { name: 'cleanup-drive-uploads', data: {} });
+  await maintenance.upsertJobScheduler('star-notifications', { every: 2 * 60_000 }, { name: 'star-notifications', data: {} });
   await maintenance.upsertJobScheduler('prune-backups', { pattern: '0 4 * * *', tz }, { name: 'prune-backups', data: { keep: config.backupRetention } });
   // BullMQ types scheduler ids as job names; this id intentionally differs.
   const backupScheduler = backupsQueue as unknown as Queue;

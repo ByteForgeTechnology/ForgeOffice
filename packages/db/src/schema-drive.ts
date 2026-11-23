@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { bigint, boolean, customType, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { primaryKey, bigint, boolean, customType, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { groups, organizations, users } from './schema';
 
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -34,6 +34,9 @@ export const driveLibraries = pgTable(
     everyoneRole: text('everyone_role', { enum: ['owner', 'editor', 'commenter', 'viewer'] }),
     /** Bytes of current versions plus older versions and the recycle bin. */
     usedBytes: bigint('used_bytes', { mode: 'number' }).notNull().default(0),
+    /** Turned off by an administrator: nobody can open it (or its site) until it is enabled again. */
+    disabledAt: timestamp('disabled_at', { withTimezone: true }),
+    disabledBy: uuid('disabled_by').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -278,6 +281,34 @@ export interface SiteListColumn {
   withTime?: boolean;
 }
 
+/**
+ * Built-in columns every list has, usable in views: when each item was created
+ * and last changed, and by whom.
+ */
+export const LIST_SYSTEM_COLUMNS = ['_created', '_modified', '_createdBy', '_modifiedBy'] as const;
+
+export type ListFilterOp = 'eq' | 'ne' | 'contains' | 'gt' | 'ge' | 'lt' | 'le' | 'empty' | 'notEmpty';
+
+/**
+ * A saved way of looking at a list (as in SharePoint): which columns, in
+ * what order, sorted, filtered and grouped how; as a table or as a board.
+ * Filter values may be "[Me]" (person columns) or "[Today]" / "[Today]+7" /
+ * "[Today]-30" (date columns).
+ */
+export interface SiteListView {
+  id: string;
+  name: string;
+  layout: 'table' | 'board';
+  /** Visible columns in order (table), or the fields shown on cards (board). */
+  columns: string[];
+  sort: { column: string; desc: boolean }[];
+  filters: { column: string; op: ListFilterOp; value?: string | number | boolean | null }[];
+  /** table: group rows by this column. */
+  groupBy?: string | null;
+  /** board: the choice column whose choices are the board's columns. */
+  boardColumn?: string | null;
+}
+
 /** Lists (as in SharePoint): structured data on a site, with typed columns. */
 export const siteLists = pgTable(
   'site_lists',
@@ -289,6 +320,8 @@ export const siteLists = pgTable(
     name: text('name').notNull(),
     description: text('description').notNull().default(''),
     columns: jsonb('columns').$type<SiteListColumn[]>().notNull(),
+    /** Saved views; the first is the default. Empty = one "All items" view. */
+    views: jsonb('views').$type<SiteListView[]>().notNull().default([]),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -313,6 +346,44 @@ export const siteListItems = pgTable(
   (t) => [index('site_list_items_list_idx').on(t.listId, t.createdAt)],
 );
 
+/** What happened to list items, for starred-item notifications. */
+export const siteListActivity = pgTable(
+  'site_list_activity',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    listId: uuid('list_id')
+      .notNull()
+      .references(() => siteLists.id, { onDelete: 'cascade' }),
+    /** No foreign key: deletions are recorded too. */
+    itemId: uuid('item_id').notNull(),
+    itemTitle: text('item_title').notNull().default(''),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    action: text('action', { enum: ['created', 'updated', 'deleted'] }).notNull(),
+    /** updated: what changed, as people read it. */
+    detail: jsonb('detail').$type<{ changes?: { column: string; from: string; to: string }[] }>(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('site_list_activity_item_idx').on(t.itemId, t.createdAt), index('site_list_activity_time_idx').on(t.createdAt)],
+);
+
+/**
+ * Stars: documents, folders and list items someone follows. Changes made by
+ * others are emailed to them, batched; `notifiedAt` is how far they have been told.
+ */
+export const stars = pgTable(
+  'stars',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['drive_item', 'list_item'] }).notNull(),
+    targetId: uuid('target_id').notNull(),
+    createdAt: createdAt(),
+    notifiedAt: timestamp('notified_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.kind, t.targetId] }), index('stars_target_idx').on(t.kind, t.targetId)],
+);
+
 export type DriveLibrary = typeof driveLibraries.$inferSelect;
 export type DriveItem = typeof driveItems.$inferSelect;
 export type DriveVersion = typeof driveVersions.$inferSelect;
@@ -322,3 +393,4 @@ export type Site = typeof sites.$inferSelect;
 export type SitePage = typeof sitePages.$inferSelect;
 export type SiteList = typeof siteLists.$inferSelect;
 export type SiteListItem = typeof siteListItems.$inferSelect;
+export type Star = typeof stars.$inferSelect;

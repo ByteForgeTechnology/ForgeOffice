@@ -264,7 +264,7 @@ describe('ForgeDrive over HTTP', () => {
     const asBob = await call('GET', base, 'bob');
     expect(asBob.json).toMatchObject({ canEdit: false, list: { itemCount: 2 } });
     expect((await add({ title: 'nope' }, 'bob')).status).toBe(403);
-    expect((await call('GET', `/api/v1/sites/by-slug/${site.slug}`, 'bob')).json.lists).toEqual([{ id: list.id, name: 'Office moves' }]);
+    expect((await call('GET', `/api/v1/sites/by-slug/${site.slug}`, 'bob')).json.lists).toMatchObject([{ id: list.id, name: 'Office moves', views: [{ name: 'All tasks' }, { name: 'My tasks' }, { name: 'Board' }, { name: 'Overdue' }] }]);
 
     // Partial updates keep other columns; clearing a value removes it.
     const upd = await call('PATCH', `${base}/items/${ok.json.item.id}`, 'alice', { values: { [col('Status')]: 'Completed', [col('Due date')]: null } });
@@ -282,6 +282,152 @@ describe('ForgeDrive over HTTP', () => {
 
     expect((await call('DELETE', base, 'alice')).status).toBe(200);
     expect((await call('GET', base, 'alice')).status).toBe(404);
+  });
+
+  it('site list views: template views, saving, validation, column removal', async () => {
+    const site = (await call('POST', '/api/v1/sites', 'alice', { name: 'Service desk', visibility: 'organisation' })).json.site;
+    const list = (await call('POST', `/api/v1/sites/${site.id}/lists`, 'alice', { name: 'Tickets', template: 'issues' })).json.list;
+    expect(list.views.map((v: { name: string }) => v.name)).toEqual(['All issues', 'Open issues', 'My issues', 'Board']);
+    const status = list.columns.find((c: { name: string }) => c.name === 'Status').id;
+    const priority = list.columns.find((c: { name: string }) => c.name === 'Priority').id;
+    expect(list.views[3]).toMatchObject({ layout: 'board', boardColumn: status });
+    expect(list.views[2].filters[0]).toMatchObject({ op: 'eq', value: '[Me]' });
+
+    const base = `/api/v1/sites/${site.id}/lists/${list.id}`;
+    const put = (views: unknown[], who = 'alice') => call('PUT', `${base}/views`, who, { views });
+    // Reorder (the first is the default) and add one.
+    const added = { name: 'Critical this week', layout: 'table', columns: ['title', status, '_modifiedBy'], sort: [{ column: '_modified', desc: true }], filters: [{ column: priority, op: 'eq', value: 'Critical' }, { column: '_created', op: 'ge', value: '[Today]-7' }], groupBy: null };
+    const saved = await put([list.views[1], list.views[0], added]);
+    expect(saved.status, saved.text).toBe(200);
+    expect(saved.json.list.views.map((v: { name: string }) => v.name)).toEqual(['Open issues', 'All issues', 'Critical this week']);
+    expect(saved.json.list.views[2].id).toMatch(/^v[0-9a-f]{8}$/);
+    // As the page sends a new view: with an empty id.
+    const withBlank = await put([...saved.json.list.views, { ...added, id: '', name: 'From the page' }]);
+    expect(withBlank.status, withBlank.text).toBe(200);
+    expect(withBlank.json.list.views[3].id).toMatch(/^v[0-9a-f]{8}$/);
+    await put(saved.json.list.views);
+
+    expect((await put([{ ...added, layout: 'board', boardColumn: 'title' }])).json.message).toMatch(/Choice column/);
+    expect((await put([{ ...added, filters: [{ column: 'nope', op: 'eq', value: 'x' }] }])).json.message).toMatch(/doesn’t exist/);
+    expect((await put([{ ...added, filters: [{ column: priority, op: 'gt', value: 'x' }] }])).json.message).toMatch(/numbers and dates/);
+    expect((await put([added, added])).json.message).toMatch(/two views/);
+    expect((await put([added], 'bob')).status).toBe(403);
+
+    // Removing Priority drops it from views that used it.
+    const columns = list.columns.filter((c: { id: string }) => c.id !== priority);
+    await call('PATCH', base, 'alice', { columns });
+    const after = (await call('GET', base, 'bob')).json.list.views;
+    expect(after.find((v: { name: string }) => v.name === 'Open issues')).toMatchObject({ groupBy: null });
+    expect(after.find((v: { name: string }) => v.name === 'Critical this week').filters).toEqual([{ column: '_created', op: 'ge', value: '[Today]-7' }]);
+
+    // Lists from before views existed show one "All items" view.
+    const blank = (await call('POST', `/api/v1/sites/${site.id}/lists`, 'alice', { name: 'Plain', columns: [{ name: 'Title', type: 'text' }, { name: 'Count', type: 'number' }] })).json.list;
+    expect(blank.views).toMatchObject([{ id: 'all', name: 'All items', layout: 'table' }]);
+  });
+
+  it('stars: emails about other people’s changes, batched, only what you can see', async () => {
+    const { runStarNotifications } = await import('@forge/drive');
+    const { sendSystemNotice } = await import('@forge/mail');
+    const sent: { to: string; subject: string; text: string; lines: string[] }[] = [];
+    const run = () =>
+      runStarNotifications(server.ctx.db, {
+        publicUrl: 'https://office.example',
+        send: async (e) => {
+          sent.push({ to: e.to.address, subject: e.subject, text: e.text, lines: e.events.map((x) => `${x.actor} ${x.verb} ${x.name}${x.where ? ` ${x.where}` : ''}`) });
+          await sendSystemNotice(server.ctx.mail, e);
+        },
+      });
+    const bobId = (await call('GET', '/api/v1/me', 'bob')).json.user.id;
+
+    // A document Bob can edit, and stars.
+    const doc = await upload('alice', lib, 'roadmap.txt', Buffer.from('v1'));
+    await call('PUT', `/api/v1/drive/items/${doc.id}/permissions`, 'alice', { grants: [{ principalType: 'user', principalId: bobId, role: 'editor' }] });
+    expect((await call('PUT', `/api/v1/stars/drive_item/${doc.id}`, 'bob')).status).toBe(200);
+    expect((await call('PUT', `/api/v1/stars/drive_item/${doc.id}`, 'admin')).status).toBe(404); // can't see it
+    expect((await call('GET', `/api/v1/drive/items/${doc.id}`, 'bob')).json.item.starred).toBe(true);
+    expect((await call('GET', `/api/v1/drive/items/${doc.id}`, 'alice')).json.item.starred).toBe(false);
+    expect((await call('GET', '/api/v1/stars', 'bob')).json.documents.map((d: { name: string }) => d.name)).toEqual(['roadmap.txt']);
+
+    // Alice changes it twice; Bob's own comment is not news to him.
+    await upload('alice', lib, 'roadmap.txt', Buffer.from('v2'), { itemId: doc.id });
+    await call('PATCH', `/api/v1/drive/items/${doc.id}`, 'alice', { name: 'roadmap-2027.txt' });
+    await call('POST', `/api/v1/drive/items/${doc.id}/comments`, 'bob', { body: 'Looks good' });
+    expect(await run()).toEqual({ emails: 1 });
+    expect(sent[0]).toMatchObject({ to: 'bob@acme.test', subject: '2 changes to things you starred', lines: ['Alice saved a new version of roadmap.txt', 'Alice renamed roadmap.txt to “roadmap-2027.txt”'] });
+    expect(sent[0]!.text).toContain(`https://office.example/drive?library=${lib}&item=${doc.id}`);
+    // Delivered to Bob's inbox.
+    const inbox = (await call('GET', '/api/v1/mail/mailboxes', 'bob')).json.items.find((b: { specialUse: string }) => b.specialUse === '\\Inbox');
+    let found = false;
+    for (let i = 0; i < 50 && !found; i++) {
+      const threads = (await call('GET', `/api/v1/mail/threads?mailboxId=${inbox.id}`, 'bob')).json.items as { latest: { subject: string } }[];
+      found = threads.some((t) => t.latest.subject === '2 changes to things you starred');
+      if (!found) await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(found).toBe(true);
+    // Nothing new: nothing sent.
+    expect(await run()).toEqual({ emails: 0 });
+
+    // A starred folder covers what's inside it.
+    const folder = (await call('POST', `/api/v1/drive/libraries/${lib}/folders`, 'alice', { name: 'Board papers' })).json.item;
+    await call('PUT', `/api/v1/drive/items/${folder.id}/permissions`, 'alice', { grants: [{ principalType: 'user', principalId: bobId, role: 'viewer' }] });
+    await call('PUT', `/api/v1/stars/drive_item/${folder.id}`, 'bob');
+    await upload('alice', lib, 'minutes.txt', Buffer.from('m'), { parentId: folder.id });
+    await run();
+    expect(sent.at(-1)!.lines).toEqual(['Alice added minutes.txt in Board papers']);
+
+    // List items: what changed, column by column.
+    const site = (await call('POST', '/api/v1/sites', 'alice', { name: 'Projects', visibility: 'organisation' })).json.site;
+    const list = (await call('POST', `/api/v1/sites/${site.id}/lists`, 'alice', { name: 'Work', template: 'tasks' })).json.list;
+    const status = list.columns.find((c: { name: string }) => c.name === 'Status').id;
+    const item = (await call('POST', `/api/v1/sites/${site.id}/lists/${list.id}/items`, 'alice', { values: { title: 'Launch', [status]: 'Not started' } })).json.item;
+    expect((await call('PUT', `/api/v1/stars/list_item/${item.id}`, 'bob')).status).toBe(200);
+    expect((await call('GET', `/api/v1/sites/${site.id}/lists/${list.id}`, 'bob')).json.starred).toEqual([item.id]);
+    await call('PATCH', `/api/v1/sites/${site.id}/lists/${list.id}/items/${item.id}`, 'alice', { values: { [status]: 'Completed' } });
+    await run();
+    expect(sent.at(-1)).toMatchObject({ subject: 'Alice changed “Launch”', lines: ['Alice changed Launch in Work'] });
+    expect(sent.at(-1)!.text).toContain('Status: Not started → Completed');
+
+    // Unstarred: no more emails.
+    await call('DELETE', `/api/v1/stars/list_item/${item.id}`, 'bob');
+    await call('PATCH', `/api/v1/sites/${site.id}/lists/${list.id}/items/${item.id}`, 'alice', { values: { [status]: 'In progress' } });
+    const before = sent.length;
+    await run();
+    expect(sent.length).toBe(before);
+  });
+
+  it('admins can disable, re-enable and delete sites', async () => {
+    const site = (await call('POST', '/api/v1/sites', 'alice', { name: 'Old intranet', visibility: 'organisation' })).json.site;
+    const doc = await upload('alice', site.libraryId, 'policy.txt', Buffer.from('policy'));
+    const link = (await call('POST', `/api/v1/drive/items/${doc.id}/links`, 'alice', { access: 'download' })).json.link;
+    const token = new URL(link.url).pathname.split('/').pop();
+    const rawUrl = (await call('GET', `/api/v1/drive/items/${doc.id}/url`, 'alice')).json.url;
+    const admin = '/api/v1/admin/drive/sites/' + site.id;
+    const row = async () => (await call('GET', '/api/v1/admin/drive/libraries', 'admin')).json.items.find((l: { id: string }) => l.id === site.libraryId);
+    expect(await row()).toMatchObject({ kind: 'site', siteId: site.id, siteSlug: site.slug, disabledAt: null });
+    // Drive says whose documents these are.
+    expect((await call('GET', `/api/v1/drive/libraries/${site.libraryId}/items`, 'bob')).json.library).toMatchObject({ kind: 'site', mine: false, everyone: true, site: { name: 'Old intranet', slug: site.slug } });
+    expect((await call('GET', `/api/v1/drive/libraries/${lib}/items`, 'alice')).json.library).toMatchObject({ kind: 'personal', mine: true, owner: 'Alice', site: null });
+    expect((await call('GET', '/api/v1/drive/libraries', 'alice')).json.items.find((l: { id: string }) => l.id === site.libraryId)).toMatchObject({ kind: 'site', site: { slug: site.slug } });
+
+    expect((await call('PATCH', admin, 'alice', { disabled: true })).status).toBe(403); // its owner is not an admin
+    expect((await call('PATCH', admin, 'admin', { disabled: true })).status).toBe(200);
+    expect((await row()).disabledAt).not.toBeNull();
+    // Closed to everyone, its owner included: the site, its documents, links and download URLs.
+    expect((await call('GET', `/api/v1/sites/by-slug/${site.slug}`, 'alice')).status).toBe(404);
+    expect((await call('GET', '/api/v1/sites', 'alice')).json.items.some((s: { id: string }) => s.id === site.id)).toBe(false);
+    expect((await call('GET', `/api/v1/drive/libraries/${site.libraryId}/items`, 'alice')).status).toBe(404);
+    expect((await call('GET', `/api/v1/drive/items/${doc.id}`, 'bob')).status).toBe(404);
+    expect((await raw(`/api/v1/share/${token}`)).status).toBe(404);
+    expect((await raw(rawUrl)).status).toBe(404);
+
+    expect((await call('PATCH', admin, 'admin', { disabled: false })).status).toBe(200);
+    expect((await call('GET', `/api/v1/sites/by-slug/${site.slug}`, 'alice')).status).toBe(200);
+    expect((await raw(`/api/v1/share/${token}`)).status).toBe(200);
+
+    expect((await call('DELETE', admin, 'admin')).status).toBe(200);
+    expect(await row()).toBeUndefined();
+    expect((await call('GET', `/api/v1/sites/by-slug/${site.slug}`, 'alice')).status).toBe(404);
+    expect((await call('DELETE', admin, 'admin')).status).toBe(404);
   });
 
   it('the ForgeDrive feature switch', async () => {

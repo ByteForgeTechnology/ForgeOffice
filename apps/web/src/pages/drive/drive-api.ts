@@ -24,6 +24,7 @@ export interface DriveItem {
   role?: DriveRole;
   library?: { id: string; name: string; kind?: string };
   libraryName?: string | null;
+  starred?: boolean;
 }
 
 export interface Library {
@@ -34,6 +35,7 @@ export interface Library {
   role: DriveRole;
   usedBytes: number;
   mine: boolean;
+  site?: { slug: string; color: string } | null;
 }
 
 export const ROLE_RANK: Record<DriveRole, number> = { viewer: 1, commenter: 2, editor: 3, owner: 4 };

@@ -46,6 +46,8 @@ import {
   driveVersions,
   orm,
   organizations,
+  sites,
+  stars,
   users,
   type DriveItem,
   type DriveRole,
@@ -147,9 +149,14 @@ export function driveRoutes(app: App, ctx: AppContext) {
     deletedAt: i.deletedAt,
     ...extra,
   });
-  const serialiseMany = async (items: DriveItem[], extra?: (i: DriveItem) => Record<string, unknown>) => {
+  /** With `forUser`, each item also says whether that person starred it. */
+  const serialiseMany = async (items: DriveItem[], extra?: (i: DriveItem) => Record<string, unknown>, forUser?: string) => {
     const people = await names(items.flatMap((i) => [i.updatedBy, i.checkedOutBy]));
-    return items.map((i) => serialise(i, people, extra?.(i)));
+    const starred =
+      forUser && items.length
+        ? new Set((await db.select({ id: stars.targetId }).from(stars).where(and(eq(stars.userId, forUser), eq(stars.kind, 'drive_item'), inArray(stars.targetId, items.map((i) => i.id))))).map((r) => r.id))
+        : null;
+    return items.map((i) => ({ ...serialise(i, people, extra?.(i)), ...(starred ? { starred: starred.has(i.id) } : {}) }));
   };
 
   // ---------------------------------------------------------------------------
@@ -160,10 +167,12 @@ export function driveRoutes(app: App, ctx: AppContext) {
     const libs = await accessibleLibraries(db, await who(req), me(req).orgId);
     const shared = await sharedWithMe(db, await who(req));
     return {
-      items: libs
-        .filter((l) => l.kind !== 'site')
-        .map((l) => ({ id: l.id, kind: l.kind, name: l.name, description: l.description, role: l.role, usedBytes: l.usedBytes, mine: l.ownerUserId === me(req).id }))
-        .sort((a, b) => Number(b.mine) - Number(a.mine) || a.name.localeCompare(b.name)),
+      items: await Promise.all(
+        libs
+          .map((l) => ({ id: l.id, kind: l.kind, name: l.name, description: l.description, role: l.role, usedBytes: l.usedBytes, mine: l.ownerUserId === me(req).id }))
+          .sort((a, b) => Number(b.mine) - Number(a.mine) || a.name.localeCompare(b.name))
+          .map(async (l) => (l.kind === 'site' ? { ...l, site: (await db.select({ slug: sites.slug, color: sites.color }).from(sites).where(eq(sites.libraryId, l.id)).limit(1))[0] ?? null } : l)),
+      ),
       sharedCount: shared.length,
       // Office editing is set up: offer new Word/Excel/PowerPoint files.
       office: !!ctx.config.drive.officeUrl,
@@ -173,7 +182,7 @@ export function driveRoutes(app: App, ctx: AppContext) {
   app.get('/api/v1/drive/shared', { schema: { tags: ['drive'], summary: 'Files and folders shared with you' } }, async (req) => {
     const rows = await sharedWithMe(db, await who(req));
     const owners = await names(rows.map((r) => r.lib.ownerUserId));
-    return { items: (await serialiseMany(rows.map((r) => r.item))).map((s, i) => ({ ...s, role: rows[i]!.role, library: { id: rows[i]!.lib.id, name: rows[i]!.lib.kind === 'personal' ? `${owners.get(rows[i]!.lib.ownerUserId!) ?? ''}’s files` : rows[i]!.lib.name } })) };
+    return { items: (await serialiseMany(rows.map((r) => r.item), undefined, me(req).id)).map((s, i) => ({ ...s, role: rows[i]!.role, library: { id: rows[i]!.lib.id, name: rows[i]!.lib.kind === 'personal' ? `${owners.get(rows[i]!.lib.ownerUserId!) ?? ''}’s files` : rows[i]!.lib.name } })) };
   });
 
   app.get('/api/v1/drive/recent', { schema: { tags: ['drive'], summary: 'Files you worked on recently' } }, async (req) => {
@@ -191,7 +200,7 @@ export function driveRoutes(app: App, ctx: AppContext) {
       const it = items.find((i) => i.id === id);
       if (it && (await requireItem(db, p, it.id, 'viewer').then(() => true).catch(() => false))) visible.push(it);
     }
-    return { items: await serialiseMany(visible) };
+    return { items: await serialiseMany(visible, undefined, me(req).id) };
   });
 
   app.get(
@@ -219,12 +228,15 @@ export function driveRoutes(app: App, ctx: AppContext) {
       const visible: DriveItem[] = [];
       for (const it of items) if (it.inheritPermissions || (await effectiveRole(db, p, lib, it))) visible.push(it);
       const crumbs = folder ? await ancestors(ctx.drive, folder) : [];
+      // Say plainly whose documents these are: yours, a person's, a team's or a site's.
+      const [site] = lib.kind === 'site' ? await db.select({ name: sites.name, slug: sites.slug, color: sites.color }).from(sites).where(eq(sites.libraryId, lib.id)).limit(1) : [];
+      const [owner] = lib.kind === 'personal' && lib.ownerUserId ? await db.select({ name: users.displayName }).from(users).where(eq(users.id, lib.ownerUserId)).limit(1) : [];
       return {
-        library: { id: lib.id, kind: lib.kind, name: lib.name, usedBytes: lib.usedBytes },
+        library: { id: lib.id, kind: lib.kind, name: lib.name, usedBytes: lib.usedBytes, mine: lib.ownerUserId === me(req).id, owner: owner?.name ?? null, site: site ?? null, everyone: !!lib.everyoneRole },
         folder: folder ? { id: folder.id, name: folder.name, inheritPermissions: folder.inheritPermissions } : null,
         breadcrumbs: crumbs.map((c) => ({ id: c.id, name: c.name })),
         role,
-        items: await serialiseMany(visible),
+        items: await serialiseMany(visible, undefined, me(req).id),
       };
     },
   );
@@ -240,7 +252,7 @@ export function driveRoutes(app: App, ctx: AppContext) {
       })
       .from(driveItems)
       .where(eq(driveItems.id, item.id));
-    const [s] = await serialiseMany([item]);
+    const [s] = await serialiseMany([item], undefined, me(req).id);
     return {
       item: { ...s, role, library: { id: lib.id, name: lib.name, kind: lib.kind }, breadcrumbs: crumbs.slice(0, -1).map((c) => ({ id: c.id, name: c.name })), counts, office: !!ctx.config.drive.officeUrl && item.kind === 'file' },
     };
@@ -445,8 +457,14 @@ export function driveRoutes(app: App, ctx: AppContext) {
     const { verifyToken } = await import('@forge/drive');
     const claims = verifyToken<{ i: string; v: string; d: number }>(key(), req.params.token, 'raw');
     if (!claims) throw forbidden('This link has expired');
-    const [row] = await db.select({ item: driveItems, version: driveVersions }).from(driveVersions).innerJoin(driveItems, eq(driveItems.id, driveVersions.itemId)).where(and(eq(driveVersions.id, claims.v), eq(driveVersions.itemId, claims.i))).limit(1);
-    if (!row || row.item.deletedAt) throw notFound('File');
+    const [row] = await db
+      .select({ item: driveItems, version: driveVersions, libraryDisabled: driveLibraries.disabledAt })
+      .from(driveVersions)
+      .innerJoin(driveItems, eq(driveItems.id, driveVersions.itemId))
+      .innerJoin(driveLibraries, eq(driveLibraries.id, driveItems.libraryId))
+      .where(and(eq(driveVersions.id, claims.v), eq(driveVersions.itemId, claims.i)))
+      .limit(1);
+    if (!row || row.item.deletedAt || row.libraryDisabled) throw notFound('File');
     if (row.item.scanStatus === 'infected' && row.item.versionId === row.version.id) throw forbidden('This file contains a virus');
     return sendBlob(ctx, reply, { sha: row.version.blobSha, size: row.version.size, mime: row.version.mime, name: row.item.name, download: !!claims.d, range: req.headers.range });
   });
@@ -682,7 +700,7 @@ export function driveRoutes(app: App, ctx: AppContext) {
         if (await requireItem(db, p, r.item.id, 'viewer').then(() => true).catch(() => false)) visible.push(r.item);
       }
       const libNames = new Map(libs.map((l) => [l.id, l.name]));
-      return { items: await serialiseMany(visible, (i) => ({ libraryName: libNames.get(i.libraryId) ?? null })) };
+      return { items: await serialiseMany(visible, (i) => ({ libraryName: libNames.get(i.libraryId) ?? null }), me(req).id) };
     },
   );
 }

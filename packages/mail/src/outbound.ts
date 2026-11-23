@@ -305,6 +305,24 @@ async function bounce(ctx: MailContext, row: OutboundMessage, original: Buffer, 
   await appendMessage(ctx, { userId: sender.id, mailboxId: inbox.id, raw, ignoreQuota: true });
 }
 
+/**
+ * A notification from ForgeOffice itself (e.g. changes to starred items):
+ * from no-reply@ the recipient's domain, marked auto-generated so it never
+ * triggers auto-replies, delivered like any other message.
+ */
+export async function sendSystemNotice(ctx: MailContext, n: { to: { name: string; address: string }; subject: string; text: string; html: string; fromName?: string }) {
+  const domain = n.to.address.split('@')[1] ?? 'localhost';
+  const { raw } = await composeMessage({
+    from: { name: n.fromName ?? 'ForgeOffice', address: `no-reply@${domain}` },
+    to: [n.to],
+    subject: n.subject,
+    text: n.text,
+    html: n.html,
+    headers: { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' },
+  });
+  return submitMessage(ctx, { userId: null, raw, envelopeFrom: '', recipients: [n.to.address], source: 'system' });
+}
+
 /** Send an iTIP REPLY (e.g. a room's automatic acceptance) to an organiser. */
 export async function sendCalendarReply(ctx: MailContext, from: MailAddress, to: string, ics: string, subject: string, partstat: PartStat) {
   const verb = partstat === 'ACCEPTED' ? 'Accepted' : partstat === 'DECLINED' ? 'Declined' : 'Tentative';

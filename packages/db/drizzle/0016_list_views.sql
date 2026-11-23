@@ -1,0 +1,1 @@
+ALTER TABLE "site_lists" ADD COLUMN "views" jsonb DEFAULT '[]'::jsonb NOT NULL;

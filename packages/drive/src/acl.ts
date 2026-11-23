@@ -64,6 +64,8 @@ export function builtInRole(lib: DriveLibrary, p: Principal): DriveRole | null {
  * library's (unless a folder on the way up stops inheritance). The best one wins.
  */
 export async function effectiveRole(db: Database, p: Principal, lib: DriveLibrary, item: DriveItem | null): Promise<DriveRole | null> {
+  // A disabled library (or site) is closed to everyone, owners included, until an admin enables it.
+  if (lib.disabledAt) return null;
   const grants = await grantsFor(db, p, lib.id);
   const onItem = (id: string | null) => grants.filter((g) => g.itemId === id).reduce<DriveRole | null>((r, g) => best(r, g.role), null);
   let role: DriveRole | null = null;

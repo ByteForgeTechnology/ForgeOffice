@@ -14,6 +14,7 @@ import {
   Folder,
   FolderInput,
   FolderPlus,
+  Globe,
   HardDrive,
   History,
   Image as ImageIcon,
@@ -28,6 +29,7 @@ import {
   RotateCcw,
   Search,
   Share2,
+  Star as StarIcon,
   ShieldAlert,
   Trash2,
   Unlock,
@@ -39,12 +41,18 @@ import { Alert, Badge, Button, Dialog, EmptyState, Field, Input, PageSpinner, Se
 import { ShareDialog, type ShareGrant } from '../../components/ShareDialog';
 import { api, errorMessage } from '../../lib/api';
 import { useDebounced } from '../../lib/hooks';
+import { StarButton } from '../../components/StarButton';
 import { ROLE_LEVELS, can, contentUrl, download, isAudio, isImage, isOffice, isPdf, isText, isVideo, uploadFile, type DriveItem, type DriveRole, type Library, type UploadJob } from './drive-api';
 
-type View = 'library' | 'shared' | 'recent' | 'trash' | 'search';
+type View = 'library' | 'shared' | 'recent' | 'starred' | 'trash' | 'search';
+
+interface Starred {
+  documents: { id: string; libraryId: string; parentId: string | null; kind: 'file' | 'folder'; name: string; mime: string | null; size: number; updatedAt: string; libraryName: string }[];
+  listItems: { id: string; title: string; listId: string; listName: string; siteSlug: string; siteName: string; siteColor: string; updatedAt: string }[];
+}
 
 interface Listing {
-  library: { id: string; kind: string; name: string; usedBytes: number };
+  library: { id: string; kind: 'personal' | 'group' | 'site'; name: string; usedBytes: number; mine: boolean; owner: string | null; site: { name: string; slug: string; color: string } | null; everyone: boolean };
   folder: { id: string; name: string; inheritPermissions: boolean } | null;
   breadcrumbs: { id: string; name: string }[];
   role: DriveRole;
@@ -91,13 +99,38 @@ export function DrivePage() {
   });
   const shared = useQuery({ queryKey: ['drive', 'shared'], queryFn: () => api<{ items: DriveItem[] }>('/api/v1/drive/shared'), enabled: view === 'shared' });
   const recent = useQuery({ queryKey: ['drive', 'recent'], queryFn: () => api<{ items: DriveItem[] }>('/api/v1/drive/recent'), enabled: view === 'recent' });
+  const starred = useQuery({ queryKey: ['stars'], queryFn: () => api<Starred>('/api/v1/stars'), enabled: view === 'starred' });
+  const starredDocs = useMemo<DriveItem[] | undefined>(
+    () =>
+      starred.data?.documents.map((d) => ({
+        ...d,
+        scanStatus: null,
+        scanDetail: null,
+        thumbnailUrl: null,
+        inheritPermissions: true,
+        checkedOutBy: null,
+        createdAt: d.updatedAt,
+        updatedBy: null,
+        deletedAt: null,
+        starred: true,
+      })),
+    [starred.data],
+  );
+  // Links in emails open an item's details: /drive?library=…&folder=…&item=…
+  const linkedItem = params.get('item');
+  useEffect(() => {
+    if (!linkedItem) return;
+    api<{ item: DriveItem }>(`/api/v1/drive/items/${linkedItem}`)
+      .then((r) => setSelected(r.item))
+      .catch(() => {});
+  }, [linkedItem]);
   const trash = useQuery({ queryKey: ['drive', 'trash', libraryId], queryFn: () => api<{ items: DriveItem[]; retentionDays: number }>(`/api/v1/drive/libraries/${libraryId}/trash`), enabled: view === 'trash' && !!libraryId });
   const results = useQuery({ queryKey: ['drive', 'search', q], queryFn: () => api<{ items: DriveItem[] }>(`/api/v1/drive/search?q=${encodeURIComponent(q)}`), enabled: view === 'search' });
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ['drive'] });
   const role = view === 'library' ? listing.data?.role : undefined;
-  const items = view === 'library' ? listing.data?.items : view === 'shared' ? shared.data?.items : view === 'recent' ? recent.data?.items : view === 'trash' ? trash.data?.items : results.data?.items;
-  const loading = view === 'library' ? listing.isLoading : view === 'shared' ? shared.isLoading : view === 'recent' ? recent.isLoading : view === 'trash' ? trash.isLoading : results.isLoading;
+  const items = view === 'library' ? listing.data?.items : view === 'shared' ? shared.data?.items : view === 'recent' ? recent.data?.items : view === 'starred' ? starredDocs : view === 'trash' ? trash.data?.items : results.data?.items;
+  const loading = view === 'library' ? listing.isLoading : view === 'shared' ? shared.isLoading : view === 'recent' ? recent.isLoading : view === 'starred' ? starred.isLoading : view === 'trash' ? trash.isLoading : results.isLoading;
 
   // ---- uploads ------------------------------------------------------------
   const startUploads = useCallback(
@@ -148,9 +181,15 @@ export function DrivePage() {
   };
 
   const libName = (l: Library) => (l.mine ? 'My files' : l.name);
-  const groupLibs = libraries.data?.items.filter((l) => !l.mine) ?? [];
+  const groupLibs = libraries.data?.items.filter((l) => !l.mine && l.kind !== 'site') ?? [];
+  const siteLibs = libraries.data?.items.filter((l) => l.kind === 'site') ?? [];
+  const lib = view === 'library' ? listing.data?.library : undefined;
+  const libTitle = (l: Listing['library']) => (l.kind === 'personal' ? (l.mine ? 'My files' : `${l.owner ?? 'Someone'}’s files`) : (l.site?.name ?? l.name));
   const title =
-    view === 'shared' ? 'Shared with me' : view === 'recent' ? 'Recent' : view === 'trash' ? 'Recycle bin' : view === 'search' ? `Results for “${q}”` : listing.data ? (listing.data.library.kind === 'personal' ? 'My files' : listing.data.library.name) : 'Drive';
+    view === 'shared' ? 'Shared with me' : view === 'recent' ? 'Recent' : view === 'starred' ? 'Starred' : view === 'trash' ? 'Recycle bin' : view === 'search' ? `Results for “${q}”` : lib ? libTitle(lib) : 'Drive';
+  useEffect(() => {
+    document.title = `${listing.data?.folder && view === 'library' ? `${listing.data.folder.name} · ` : ''}${title} · Drive`;
+  }, [title, listing.data?.folder, view]);
 
   if (libraries.isLoading) return <PageSpinner />;
 
@@ -166,14 +205,32 @@ export function DrivePage() {
           {myLibrary && <NavButton active={view === 'library' && libraryId === myLibrary.id} icon={HardDrive} label="My files" onClick={() => go({ library: myLibrary.id })} />}
           <NavButton active={view === 'shared'} icon={Share2} label="Shared with me" count={libraries.data?.sharedCount} onClick={() => go({ view: 'shared' })} />
           <NavButton active={view === 'recent'} icon={Clock} label="Recent" onClick={() => go({ view: 'recent' })} />
+          <NavButton active={view === 'starred'} icon={StarIcon} label="Starred" onClick={() => go({ view: 'starred' })} />
           {groupLibs.length > 0 && <p className="px-3 pt-4 pb-1 text-xs font-semibold text-zinc-500">Team libraries</p>}
           {groupLibs.map((l) => (
             <NavButton key={l.id} active={view === 'library' && libraryId === l.id} icon={Users} label={libName(l)} onClick={() => go({ library: l.id })} />
           ))}
+          {siteLibs.length > 0 && <p className="px-3 pt-4 pb-1 text-xs font-semibold text-zinc-500">Sites</p>}
+          {siteLibs.map((l) => (
+            <NavButton key={l.id} active={view === 'library' && libraryId === l.id} icon={Globe} label={l.name} onClick={() => go({ library: l.id })} />
+          ))}
+          {/* A library opened from a link (an organisation-wide site, a colleague's files) is shown too, so you can see where you are. */}
+          {lib && !libraries.data?.items.some((l) => l.id === lib.id) && (
+            <>
+              <p className="px-3 pt-4 pb-1 text-xs font-semibold text-zinc-500">Viewing</p>
+              <NavButton active icon={lib.kind === 'site' ? Globe : lib.kind === 'group' ? Users : HardDrive} label={libTitle(lib)} onClick={() => go({ library: lib.id })} />
+            </>
+          )}
           <div className="pt-4">
             <NavButton active={view === 'trash'} icon={Trash2} label="Recycle bin" onClick={() => go({ view: 'trash', library: libraryId })} />
           </div>
-          {myLibrary && <p className="px-3 pt-4 text-xs text-zinc-500">{formatBytes(myLibrary.usedBytes)} used in My files</p>}
+          {lib ? (
+            <p className="px-3 pt-4 text-xs text-zinc-500">
+              {formatBytes(lib.usedBytes)} used in {libTitle(lib)}
+            </p>
+          ) : (
+            myLibrary && <p className="px-3 pt-4 text-xs text-zinc-500">{formatBytes(myLibrary.usedBytes)} used in My files</p>
+          )}
         </nav>
       </aside>
 
@@ -240,38 +297,38 @@ export function DrivePage() {
           }} />
         </header>
 
-        <div className="flex items-center gap-1 px-4 pt-3 text-sm">
-          {view === 'library' && listing.data ? (
-            <nav aria-label="Folder path" className="flex min-w-0 flex-wrap items-center gap-1">
-              <button type="button" className="font-semibold hover:underline" onClick={() => go({ library: libraryId })}>
-                {title}
-              </button>
-              {listing.data.breadcrumbs.map((b) => (
-                <span key={b.id} className="flex items-center gap-1">
-                  <ChevronRight className="size-4 text-zinc-400" />
-                  <button type="button" className="hover:underline" onClick={() => go({ library: libraryId, folder: b.id })}>
-                    {b.name}
-                  </button>
-                </span>
-              ))}
-              {listing.data.role === 'viewer' && <Badge className="ml-2">View only</Badge>}
-            </nav>
-          ) : (
-            <h1 className="font-semibold">{title}</h1>
-          )}
-        </div>
+        {view === 'library' && listing.data && lib ? (
+          <LocationHeader
+            lib={lib}
+            title={title}
+            role={listing.data.role}
+            breadcrumbs={listing.data.breadcrumbs}
+            folder={listing.data.folder}
+            onRoot={() => go({ library: libraryId })}
+            onFolder={(id) => go({ library: libraryId, folder: id })}
+          />
+        ) : (
+          <div className="px-4 pt-4">
+            <h1 className="text-xl font-semibold">{title}</h1>
+          </div>
+        )}
         {view === 'trash' && trash.data && <p className="px-4 pt-1 text-xs text-zinc-500">Items are deleted for good after {trash.data.retentionDays} days.</p>}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
           {loading ? (
             <PageSpinner />
-          ) : !items?.length ? (
+          ) : view === 'starred' && !items?.length && !starred.data?.listItems.length ? (
+            <EmptyState icon={<StarIcon />} title="Nothing starred yet" description="Star documents, folders and list items to keep them here. You’ll get an email when someone else changes them." />
+          ) : !items?.length && view !== 'starred' ? (
             <EmptyState
               icon={view === 'trash' ? <Trash2 /> : <Folder />}
               title={view === 'trash' ? 'The recycle bin is empty' : view === 'search' ? 'Nothing found' : view === 'shared' ? 'Nothing shared with you yet' : 'This folder is empty'}
               description={view === 'library' && can(role, 'editor') ? 'Drag files here, or use Upload.' : undefined}
             />
           ) : (
+            <>
+            {view === 'starred' && !!starred.data?.listItems.length && !!items?.length && <h2 className="mb-1 px-2 text-xs font-semibold text-zinc-500">Documents and folders</h2>}
+            {!!items?.length && (
             <table className="w-full text-sm">
               <thead className="text-left text-xs text-zinc-500">
                 <tr>
@@ -284,7 +341,7 @@ export function DrivePage() {
                 {items.map((i) => {
                   const Icon = iconFor(i);
                   return (
-                    <tr key={i.id} className={cn('cursor-pointer border-t border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900', selected?.id === i.id && 'bg-brand/5')} onClick={() => setSelected(i)} onDoubleClick={() => open(i)}>
+                    <tr key={i.id} className={cn('group cursor-pointer border-t border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900', selected?.id === i.id && 'bg-brand/5')} onClick={() => setSelected(i)} onDoubleClick={() => open(i)}>
                       <td className="px-2 py-2">
                         <span className="flex min-w-0 items-center gap-3">
                           {i.thumbnailUrl ? <img src={i.thumbnailUrl} alt="" className="size-8 shrink-0 rounded object-cover" loading="lazy" /> : <Icon className={cn('size-5 shrink-0', i.kind === 'folder' ? 'text-amber-500' : 'text-zinc-400')} />}
@@ -294,8 +351,9 @@ export function DrivePage() {
                           {i.scanStatus === 'infected' && <Badge tone="danger">Virus</Badge>}
                           {i.scanStatus === 'pending' && <Badge>Scanning</Badge>}
                           {i.checkedOutBy && <Lock className="size-3.5 shrink-0 text-amber-600" aria-label={`Checked out by ${i.checkedOutBy.name}`} />}
+                          {view !== 'trash' && i.starred !== undefined && <StarButton kind="drive_item" id={i.id} starred={i.starred} name={i.name} className={cn(!i.starred && 'opacity-0 group-hover:opacity-100 focus:opacity-100')} />}
                         </span>
-                        {(view === 'shared' || view === 'search') && (i.library?.name || i.libraryName) && <span className="ml-11 block truncate text-xs text-zinc-500">{i.library?.name ?? i.libraryName}</span>}
+                        {(view === 'shared' || view === 'search' || view === 'starred') && (i.library?.name || i.libraryName) && <span className="ml-11 block truncate text-xs text-zinc-500">{i.library?.name ?? i.libraryName}</span>}
                       </td>
                       <td className="hidden px-2 py-2 text-zinc-500 md:table-cell">
                         {view === 'trash' ? `${formatRelative(i.deletedAt)}${i.deletedBy ? ` by ${i.deletedBy}` : ''}` : `${formatRelative(i.updatedAt)}${i.updatedBy ? ` · ${i.updatedBy}` : ''}`}
@@ -306,6 +364,29 @@ export function DrivePage() {
                 })}
               </tbody>
             </table>
+            )}
+            {view === 'starred' && !!starred.data?.listItems.length && (
+              <section className="mt-6">
+                <h2 className="mb-1 px-2 text-xs font-semibold text-zinc-500">List items</h2>
+                <ul className="divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
+                  {starred.data.listItems.map((l) => (
+                    <li key={l.id} className="flex items-center gap-3 px-2 py-2">
+                      <span className="size-2.5 shrink-0 rounded-full" style={{ background: l.siteColor }} />
+                      <a href={`/sites/${l.siteSlug}/lists/${l.listId}?item=${l.id}`} className="min-w-0 flex-1 truncate hover:underline">
+                        {l.title || 'Untitled'}
+                        <span className="text-zinc-500">
+                          {' '}
+                          · {l.listName} · {l.siteName}
+                        </span>
+                      </a>
+                      <span className="hidden text-zinc-500 md:inline">{formatRelative(l.updatedAt)}</span>
+                      <StarButton kind="list_item" id={l.id} starred name={l.title} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            </>
           )}
         </div>
 
@@ -426,6 +507,7 @@ function DetailsPanel({ item: summary, inTrash, onClose, onOpen, onAction, onMov
       <div className="flex items-center gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
         <Icon className="size-5 shrink-0 text-zinc-400" />
         <p className="min-w-0 flex-1 truncate font-medium">{summary.name}</p>
+        {!inTrash && item && <StarButton kind="drive_item" id={item.id} starred={!!item.starred} name={item.name} />}
         <button type="button" aria-label="Close details" onClick={onClose} className="rounded p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800">
           <X className="size-4" />
         </button>
@@ -1073,6 +1155,83 @@ function NewMenu({ office, onFolder, onDocument }: { office: boolean; onFolder: 
             </button>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+const ACCESS_LABEL: Record<DriveRole, string> = { owner: 'You own this', editor: 'You can edit', commenter: 'You can comment', viewer: 'View only' };
+
+/** Where you are: whose documents these are, who can see them, your access and the folder path. */
+function LocationHeader({
+  lib,
+  title,
+  role,
+  breadcrumbs,
+  folder,
+  onRoot,
+  onFolder,
+}: {
+  lib: Listing['library'];
+  title: string;
+  role: DriveRole;
+  breadcrumbs: { id: string; name: string }[];
+  folder: Listing['folder'];
+  onRoot: () => void;
+  onFolder: (id: string) => void;
+}) {
+  const Icon = lib.kind === 'site' ? Globe : lib.kind === 'group' ? Users : HardDrive;
+  const color = lib.site?.color ?? (lib.kind === 'group' ? '#0d9488' : lib.mine ? '#4f46e5' : '#7c3aed');
+  const kind =
+    lib.kind === 'site'
+      ? `Site documents${lib.everyone ? ' · everyone in the organisation can view' : ' · site members'}`
+      : lib.kind === 'group'
+        ? 'Team library · shared with the team’s members'
+        : lib.mine
+          ? 'Your personal files · only you, and people you share with, can see them'
+          : `${lib.owner ?? 'A colleague'}’s personal files · shared with you`;
+  return (
+    <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+      <div className="flex items-center gap-3">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg text-white" style={{ background: color }} aria-hidden>
+          <Icon className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-xl font-semibold">{title}</h1>
+          <p className="truncate text-sm text-zinc-500">{kind}</p>
+        </div>
+        <Badge tone={role === 'viewer' ? 'neutral' : 'brand'} className="hidden shrink-0 sm:inline-flex">
+          {ACCESS_LABEL[role]}
+        </Badge>
+        {lib.site && (
+          <a href={`/sites/${lib.site.slug}`} className="hidden shrink-0 sm:block">
+            <Button size="sm" icon={<ExternalLink className="size-4" />}>
+              Open site
+            </Button>
+          </a>
+        )}
+      </div>
+      {folder && (
+        <nav aria-label="Folder path" className="mt-2 flex min-w-0 flex-wrap items-center gap-1 text-sm">
+          <button type="button" className="text-zinc-600 hover:underline dark:text-zinc-400" onClick={onRoot}>
+            {title}
+          </button>
+          {breadcrumbs.filter((b) => b.id !== folder.id).map((b) => (
+            <span key={b.id} className="flex items-center gap-1">
+              <ChevronRight className="size-4 text-zinc-400" />
+              <button type="button" className="text-zinc-600 hover:underline dark:text-zinc-400" onClick={() => onFolder(b.id)}>
+                {b.name}
+              </button>
+            </span>
+          ))}
+          <span className="flex items-center gap-1">
+            <ChevronRight className="size-4 text-zinc-400" />
+            <span className="inline-flex items-center gap-1 font-medium">
+              <Folder className="size-4 text-amber-500" />
+              {folder.name}
+            </span>
+          </span>
+        </nav>
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Type } from 'typebox';
-import { orm, siteListItems, siteLists, users, type DriveRole, type Site, type SiteList, type SiteListColumn } from '@forge/db';
+import { LIST_SYSTEM_COLUMNS, orm, siteListActivity, siteListItems, siteLists, stars, users, type DriveRole, type ListFilterOp, type Site, type SiteList, type SiteListColumn, type SiteListView } from '@forge/db';
 import type { AppContext } from '../context';
 import { badRequest, notFound } from '../errors';
 import type { App } from '../types';
@@ -18,51 +18,93 @@ const COLUMN_TYPES = ['text', 'note', 'number', 'choice', 'date', 'boolean', 'pe
 const newColumnId = () => `c${randomBytes(4).toString('hex')}`;
 const title = (name = 'Title'): SiteListColumn => ({ id: 'title', name, type: 'text', required: true });
 
-/** Ready-made lists, as SharePoint offers. */
-export const LIST_TEMPLATES: Record<string, { description: string; columns: () => SiteListColumn[] }> = {
-  blank: { description: '', columns: () => [title()] },
+const newViewId = () => `v${randomBytes(4).toString('hex')}`;
+const view = (name: string, columns: string[], extra: Partial<SiteListView> = {}): SiteListView => ({ id: newViewId(), name, layout: 'table', columns, sort: [], filters: [], ...extra });
+
+/** Ready-made lists, as SharePoint offers, with their columns and views. */
+export const LIST_TEMPLATES: Record<string, { description: string; build: () => { columns: SiteListColumn[]; views: SiteListView[] } }> = {
+  blank: { description: '', build: () => ({ columns: [title()], views: [view('All items', ['title', '_modified'])] }) },
   tasks: {
     description: 'Work to do, who is doing it and when it is due.',
-    columns: () => [
-      title('Task'),
-      { id: newColumnId(), name: 'Status', type: 'choice', choices: ['Not started', 'In progress', 'Completed', 'Blocked'] },
-      { id: newColumnId(), name: 'Priority', type: 'choice', choices: ['High', 'Normal', 'Low'] },
-      { id: newColumnId(), name: 'Assigned to', type: 'person' },
-      { id: newColumnId(), name: 'Due date', type: 'date' },
-      { id: newColumnId(), name: 'Notes', type: 'note' },
-    ],
+    build: () => {
+      const [status, priority, assigned, due, notes] = [newColumnId(), newColumnId(), newColumnId(), newColumnId(), newColumnId()];
+      const all = ['title', status, priority, assigned, due];
+      return {
+        columns: [
+          title('Task'),
+          { id: status, name: 'Status', type: 'choice', choices: ['Not started', 'In progress', 'Completed', 'Blocked'] },
+          { id: priority, name: 'Priority', type: 'choice', choices: ['High', 'Normal', 'Low'] },
+          { id: assigned, name: 'Assigned to', type: 'person' },
+          { id: due, name: 'Due date', type: 'date' },
+          { id: notes, name: 'Notes', type: 'note' },
+        ],
+        views: [
+          view('All tasks', all, { sort: [{ column: due, desc: false }] }),
+          view('My tasks', all, { filters: [{ column: assigned, op: 'eq', value: '[Me]' }, { column: status, op: 'ne', value: 'Completed' }], sort: [{ column: due, desc: false }] }),
+          view('Board', ['title', assigned, due, priority], { layout: 'board', boardColumn: status }),
+          view('Overdue', all, { filters: [{ column: due, op: 'lt', value: '[Today]' }, { column: status, op: 'ne', value: 'Completed' }], sort: [{ column: due, desc: false }] }),
+        ],
+      };
+    },
   },
   issues: {
     description: 'Track issues from report to resolution.',
-    columns: () => [
-      title('Issue'),
-      { id: newColumnId(), name: 'Description', type: 'note' },
-      { id: newColumnId(), name: 'Status', type: 'choice', choices: ['New', 'Active', 'Resolved', 'Closed'] },
-      { id: newColumnId(), name: 'Priority', type: 'choice', choices: ['Critical', 'High', 'Medium', 'Low'] },
-      { id: newColumnId(), name: 'Assigned to', type: 'person' },
-      { id: newColumnId(), name: 'Date reported', type: 'date' },
-    ],
+    build: () => {
+      const [desc, status, priority, assigned, reported] = [newColumnId(), newColumnId(), newColumnId(), newColumnId(), newColumnId()];
+      const all = ['title', status, priority, assigned, reported];
+      return {
+        columns: [
+          title('Issue'),
+          { id: desc, name: 'Description', type: 'note' },
+          { id: status, name: 'Status', type: 'choice', choices: ['New', 'Active', 'Resolved', 'Closed'] },
+          { id: priority, name: 'Priority', type: 'choice', choices: ['Critical', 'High', 'Medium', 'Low'] },
+          { id: assigned, name: 'Assigned to', type: 'person' },
+          { id: reported, name: 'Date reported', type: 'date' },
+        ],
+        views: [
+          view('All issues', all, { sort: [{ column: '_created', desc: true }] }),
+          view('Open issues', all, { filters: [{ column: status, op: 'ne', value: 'Resolved' }, { column: status, op: 'ne', value: 'Closed' }], groupBy: priority }),
+          view('My issues', all, { filters: [{ column: assigned, op: 'eq', value: '[Me]' }, { column: status, op: 'ne', value: 'Closed' }] }),
+          view('Board', ['title', priority, assigned], { layout: 'board', boardColumn: status }),
+        ],
+      };
+    },
   },
   contacts: {
     description: 'People outside the organisation the team works with.',
-    columns: () => [
-      title('Name'),
-      { id: newColumnId(), name: 'Company', type: 'text' },
-      { id: newColumnId(), name: 'Email', type: 'text' },
-      { id: newColumnId(), name: 'Phone', type: 'text' },
-      { id: newColumnId(), name: 'Website', type: 'link' },
-      { id: newColumnId(), name: 'Notes', type: 'note' },
-    ],
+    build: () => {
+      const [company, email, phone, web, notes] = [newColumnId(), newColumnId(), newColumnId(), newColumnId(), newColumnId()];
+      return {
+        columns: [
+          title('Name'),
+          { id: company, name: 'Company', type: 'text' },
+          { id: email, name: 'Email', type: 'text' },
+          { id: phone, name: 'Phone', type: 'text' },
+          { id: web, name: 'Website', type: 'link' },
+          { id: notes, name: 'Notes', type: 'note' },
+        ],
+        views: [view('All contacts', ['title', company, email, phone], { sort: [{ column: 'title', desc: false }] }), view('By company', ['title', email, phone], { groupBy: company, sort: [{ column: 'title', desc: false }] })],
+      };
+    },
   },
   events: {
     description: 'Upcoming dates, with where and when.',
-    columns: () => [
-      title('Event'),
-      { id: newColumnId(), name: 'Start', type: 'date', withTime: true, required: true },
-      { id: newColumnId(), name: 'End', type: 'date', withTime: true },
-      { id: newColumnId(), name: 'Location', type: 'text' },
-      { id: newColumnId(), name: 'Description', type: 'note' },
-    ],
+    build: () => {
+      const [start, end, location, desc] = [newColumnId(), newColumnId(), newColumnId(), newColumnId()];
+      return {
+        columns: [
+          title('Event'),
+          { id: start, name: 'Start', type: 'date', withTime: true, required: true },
+          { id: end, name: 'End', type: 'date', withTime: true },
+          { id: location, name: 'Location', type: 'text' },
+          { id: desc, name: 'Description', type: 'note' },
+        ],
+        views: [
+          view('Upcoming', ['title', start, end, location], { filters: [{ column: start, op: 'ge', value: '[Today]' }], sort: [{ column: start, desc: false }] }),
+          view('All events', ['title', start, end, location], { sort: [{ column: start, desc: true }] }),
+        ],
+      };
+    },
   },
 };
 
@@ -101,6 +143,84 @@ function cleanColumns(input: ColumnInput[]): SiteListColumn[] {
   });
   if (input[0] && input[0].id && input[0].id !== 'title') throw badRequest('The Title column must stay first');
   return out;
+}
+
+const FILTER_OPS: ListFilterOp[] = ['eq', 'ne', 'contains', 'gt', 'ge', 'lt', 'le', 'empty', 'notEmpty'];
+const MAX_VIEWS = 30;
+const ViewSchema = Type.Object({
+  // Empty or missing for a new view: the server gives it an id.
+  id: Type.Optional(Type.String({ pattern: '^([a-z][a-z0-9]{0,31})?$' })),
+  name: Type.String({ minLength: 1, maxLength: 80 }),
+  layout: Type.Union([Type.Literal('table'), Type.Literal('board')]),
+  columns: Type.Array(Type.String({ maxLength: 32 }), { maxItems: 60 }),
+  sort: Type.Array(Type.Object({ column: Type.String({ maxLength: 32 }), desc: Type.Boolean() }), { maxItems: 2 }),
+  filters: Type.Array(
+    Type.Object({ column: Type.String({ maxLength: 32 }), op: Type.Union(FILTER_OPS.map((o) => Type.Literal(o))), value: Type.Optional(Type.Union([Type.String({ maxLength: 255 }), Type.Number(), Type.Boolean(), Type.Null()])) }),
+    { maxItems: 10 },
+  ),
+  groupBy: Type.Optional(Type.Union([Type.String({ maxLength: 32 }), Type.Null()])),
+  boardColumn: Type.Optional(Type.Union([Type.String({ maxLength: 32 }), Type.Null()])),
+});
+type ViewInput = Omit<SiteListView, 'id'> & { id?: string };
+
+/** The "All items" view a list has before any are saved. */
+const defaultView = (columns: SiteListColumn[]): SiteListView => ({ id: 'all', name: 'All items', layout: 'table', columns: [...columns.slice(0, 8).map((c) => c.id), '_modified'], sort: [], filters: [], groupBy: null, boardColumn: null });
+export const viewsOf = (list: Pick<SiteList, 'columns' | 'views'>) => (list.views?.length ? list.views : [defaultView(list.columns)]);
+
+/**
+ * Checked views. With `prune`, references to columns that no longer exist are
+ * dropped instead of refused (used after columns change).
+ */
+function cleanViews(input: ViewInput[], columns: SiteListColumn[], prune = false): SiteListView[] {
+  if (!input.length || input.length > MAX_VIEWS) throw badRequest(`A list has between 1 and ${MAX_VIEWS} views`);
+  const known = new Set<string>([...columns.map((c) => c.id), ...LIST_SYSTEM_COLUMNS]);
+  const typeOf = (id: string) => columns.find((c) => c.id === id)?.type ?? (id === '_createdBy' || id === '_modifiedBy' ? 'person' : 'date');
+  const check = (id: string, what: string) => {
+    if (known.has(id)) return true;
+    if (prune) return false;
+    throw badRequest(`${what} uses a column that doesn’t exist`);
+  };
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  return input.map((v) => {
+    const name = v.name.trim();
+    if (!name) throw badRequest('Every view needs a name');
+    if (names.has(name.toLowerCase())) throw badRequest(`There are two views called “${name}”`);
+    names.add(name.toLowerCase());
+    const id = v.id && !ids.has(v.id) ? v.id : newViewId();
+    ids.add(id);
+    const cols = [...new Set(v.columns)].filter((c) => check(c, `“${name}”`));
+    if (!cols.length) cols.push('title');
+    const out: SiteListView = {
+      id,
+      name,
+      layout: v.layout,
+      columns: cols,
+      sort: v.sort.filter((x) => check(x.column, `“${name}” sorting`)),
+      filters: v.filters
+        .filter((f) => check(f.column, `“${name}” filters`))
+        .map((f) => {
+          if (f.op === 'empty' || f.op === 'notEmpty') return { column: f.column, op: f.op };
+          if (f.value === undefined || f.value === null || f.value === '') throw badRequest(`“${name}”: give each filter a value`);
+          const t = typeOf(f.column);
+          if (f.op === 'contains' && !['text', 'note', 'link', 'person'].includes(t)) throw badRequest(`“${name}”: “contains” only works on text columns`);
+          if (['gt', 'ge', 'lt', 'le'].includes(f.op) && !['number', 'date'].includes(t)) throw badRequest(`“${name}”: greater/less than only works on numbers and dates`);
+          if (t === 'date' && typeof f.value === 'string' && !/^\[Today\]([+-]\d{1,4})?$/.test(f.value) && Number.isNaN(new Date(f.value).getTime())) throw badRequest(`“${name}”: enter a date or [Today]`);
+          return { column: f.column, op: f.op, value: f.value };
+        }),
+      groupBy: v.groupBy && check(v.groupBy, `“${name}” grouping`) ? v.groupBy : null,
+      boardColumn: null,
+    };
+    if (v.layout === 'board') {
+      const board = columns.find((c) => c.id === v.boardColumn && c.type === 'choice');
+      if (!board) {
+        if (!prune) throw badRequest(`“${name}”: a board needs a Choice column to make its columns`);
+        out.layout = 'table';
+      } else out.boardColumn = board.id;
+      out.groupBy = null;
+    }
+    return out;
+  });
 }
 
 const empty = (v: unknown) => v === undefined || v === null || v === '';
@@ -168,6 +288,31 @@ async function cleanValues(ctx: AppContext, orgId: string, columns: SiteListColu
   return out;
 }
 
+/** A value as people read it in a change notification. */
+async function describeValue(ctx: AppContext, col: SiteListColumn, v: unknown): Promise<string> {
+  if (v === undefined || v === null || v === '') return '—';
+  if (col.type === 'boolean') return v ? 'Yes' : 'No';
+  if (col.type === 'person') {
+    const [u] = await ctx.db.select({ name: users.displayName }).from(users).where(eq(users.id, v as string)).limit(1);
+    return u?.name ?? 'someone';
+  }
+  if (col.type === 'date' && col.withTime) return new Date(v as string).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  const text = String(v);
+  return text.length > 80 ? `${text.slice(0, 77)}…` : text;
+}
+
+/** Which columns changed between two versions of an item. */
+async function changesBetween(ctx: AppContext, columns: SiteListColumn[], before: Record<string, unknown>, after: Record<string, unknown>) {
+  const out: { column: string; from: string; to: string }[] = [];
+  for (const c of columns) {
+    if (JSON.stringify(before[c.id] ?? null) === JSON.stringify(after[c.id] ?? null)) continue;
+    // Long text: say that it changed, not what it says.
+    if (c.type === 'note') out.push({ column: c.name, from: '', to: '' });
+    else out.push({ column: c.name, from: await describeValue(ctx, c, before[c.id]), to: await describeValue(ctx, c, after[c.id]) });
+  }
+  return out;
+}
+
 /** Lists on a site: the list (columns) and its items, both following the site's permissions. */
 export function siteListRoutes(app: App, ctx: AppContext, requireSite: RequireSite) {
   const { db } = ctx;
@@ -182,7 +327,7 @@ export function siteListRoutes(app: App, ctx: AppContext, requireSite: RequireSi
     if (!list) throw notFound('List');
     return { site, role, list };
   };
-  const serialiseList = (l: SiteList, itemCount?: number) => ({ id: l.id, name: l.name, description: l.description, columns: l.columns, itemCount, updatedAt: l.updatedAt });
+  const serialiseList = (l: SiteList, itemCount?: number) => ({ id: l.id, name: l.name, description: l.description, columns: l.columns, views: viewsOf(l), itemCount, updatedAt: l.updatedAt });
 
   /** Names for person columns and who created or changed each item. */
   const peopleFor = async (list: SiteList, items: { values: Record<string, unknown>; createdBy: string | null; updatedBy: string | null }[]) => {
@@ -207,7 +352,7 @@ export function siteListRoutes(app: App, ctx: AppContext, requireSite: RequireSi
       .where(eq(siteLists.siteId, site.id))
       .groupBy(siteLists.id)
       .orderBy(asc(siteLists.name));
-    return { items: rows.map((r) => serialiseList(r.list, Number(r.items))), templates: Object.entries(LIST_TEMPLATES).map(([key, t]) => ({ key, description: t.description, columns: t.columns().map((c) => c.name) })) };
+    return { items: rows.map((r) => serialiseList(r.list, Number(r.items))), templates: Object.entries(LIST_TEMPLATES).map(([key, t]) => ({ key, description: t.description, columns: t.build().columns.map((c) => c.name), views: t.build().views.map((v) => v.name) })) };
   });
 
   app.post(
@@ -224,10 +369,12 @@ export function siteListRoutes(app: App, ctx: AppContext, requireSite: RequireSi
       const { site } = await requireSite(req, { id: req.params.id }, 'editor');
       const template = LIST_TEMPLATES[req.body.template ?? 'blank'];
       if (!template) throw badRequest('Unknown list template');
-      const columns = req.body.columns ? cleanColumns(req.body.columns) : template.columns();
+      const built = template.build();
+      const columns = req.body.columns ? cleanColumns(req.body.columns) : built.columns;
+      const views = req.body.columns ? [defaultView(columns)] : built.views;
       const [list] = await db
         .insert(siteLists)
-        .values({ siteId: site.id, name: req.body.name.trim(), description: req.body.description?.trim() ?? template.description, columns, createdBy: me(req).id })
+        .values({ siteId: site.id, name: req.body.name.trim(), description: req.body.description?.trim() ?? template.description, columns, views, createdBy: me(req).id })
         .returning();
       reply.code(201);
       return { list: serialiseList(list!, 0) };
@@ -248,6 +395,9 @@ export function siteListRoutes(app: App, ctx: AppContext, requireSite: RequireSi
       canEdit: role !== 'viewer' && role !== 'commenter',
       items: items.map((i) => ({ id: i.id, values: i.values, createdBy: i.createdBy, updatedBy: i.updatedBy, createdAt: i.createdAt, updatedAt: i.updatedAt })),
       people: await peopleFor(list, items),
+      starred: items.length
+        ? (await db.select({ id: stars.targetId }).from(stars).where(and(eq(stars.userId, me(req).id), eq(stars.kind, 'list_item'), inArray(stars.targetId, items.map((i) => i.id))))).map((r) => r.id)
+        : [],
     };
   });
 
@@ -269,10 +419,21 @@ export function siteListRoutes(app: App, ctx: AppContext, requireSite: RequireSi
         for (const id of removed) await tx.update(siteListItems).set({ values: sql`${siteListItems.values} - ${id}::text` }).where(eq(siteListItems.listId, list.id));
         return tx
           .update(siteLists)
-          .set({ name: req.body.name?.trim() ?? list.name, description: req.body.description?.trim() ?? list.description, columns })
+          .set({ name: req.body.name?.trim() ?? list.name, description: req.body.description?.trim() ?? list.description, columns, views: req.body.columns && list.views.length ? cleanViews(list.views, columns, true) : list.views })
           .where(eq(siteLists.id, list.id))
           .returning();
       });
+      return { list: serialiseList(updated!) };
+    },
+  );
+
+  app.put(
+    '/api/v1/sites/:id/lists/:listId/views',
+    { schema: { tags: ['sites'], summary: 'Save the list’s views (the first is the default)', params: ListParams, body: Type.Object({ views: Type.Array(ViewSchema, { minItems: 1, maxItems: MAX_VIEWS }) }) } },
+    async (req) => {
+      const { list } = await requireList(req, req.params.id, req.params.listId, 'editor');
+      const views = cleanViews(req.body.views, list.columns);
+      const [updated] = await db.update(siteLists).set({ views }).where(eq(siteLists.id, list.id)).returning();
       return { list: serialiseList(updated!) };
     },
   );
@@ -300,14 +461,17 @@ export function siteListRoutes(app: App, ctx: AppContext, requireSite: RequireSi
     if (!existing) throw notFound('Item');
     const values = await cleanValues(ctx, me(req).orgId, list.columns, req.body.values, existing.values);
     const [item] = await db.update(siteListItems).set({ values, updatedBy: me(req).id }).where(eq(siteListItems.id, existing.id)).returning();
+    const changes = await changesBetween(ctx, list.columns, existing.values, values);
+    if (changes.length) await db.insert(siteListActivity).values({ listId: list.id, itemId: existing.id, itemTitle: String(values.title ?? ''), userId: me(req).id, action: 'updated', detail: { changes } });
     await db.update(siteLists).set({ updatedAt: new Date() }).where(eq(siteLists.id, list.id));
     return { item: { id: item!.id, values: item!.values, createdBy: item!.createdBy, updatedBy: item!.updatedBy, createdAt: item!.createdAt, updatedAt: item!.updatedAt }, people: await peopleFor(list, [item!]) };
   });
 
   app.delete('/api/v1/sites/:id/lists/:listId/items/:itemId', { schema: { tags: ['sites'], summary: 'Delete an item', params: ItemParams } }, async (req) => {
     const { list } = await requireList(req, req.params.id, req.params.listId, 'editor');
-    const gone = await db.delete(siteListItems).where(and(eq(siteListItems.id, req.params.itemId), eq(siteListItems.listId, list.id))).returning({ id: siteListItems.id });
+    const gone = await db.delete(siteListItems).where(and(eq(siteListItems.id, req.params.itemId), eq(siteListItems.listId, list.id))).returning();
     if (!gone.length) throw notFound('Item');
+    await db.insert(siteListActivity).values({ listId: list.id, itemId: gone[0]!.id, itemTitle: String(gone[0]!.values.title ?? ''), userId: me(req).id, action: 'deleted' });
     return { ok: true };
   });
 }

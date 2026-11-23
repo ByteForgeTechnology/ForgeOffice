@@ -6,3 +6,4 @@ export * from './tokens';
 export * from './processing';
 export * from './office';
 export * from './templates';
+export * from './stars';

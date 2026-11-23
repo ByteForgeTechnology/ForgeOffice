@@ -19,6 +19,7 @@ export interface QueueJobs {
     /** ForgeDrive: empty recycle bins past the retention period, drop abandoned uploads. */
     'purge-drive-trash': Record<string, never>;
     'cleanup-drive-uploads': Record<string, never>;
+    'star-notifications': Record<string, never>;
   };
   'mail-delivery': {
     deliver: { outboundId: string };
