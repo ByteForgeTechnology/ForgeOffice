@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Box, Database, HardDrive, Pause, Radio, Trash2 } from 'lucide-react';
+import { Archive, Box, Clock, Database, HardDrive, Pause, Radio, Trash2 } from 'lucide-react';
 import {
   Alert,
   Badge,
@@ -16,6 +16,7 @@ import {
   Table,
   Td,
   Th,
+  cn,
   formatBytes,
   formatDateTime,
   formatRelative,
@@ -138,46 +139,92 @@ function Volumes({ o }: { o: SystemOverview }) {
 }
 
 function Queues({ o }: { o: SystemOverview }) {
+  const upcoming = o.queues
+    .flatMap((q) => q.schedules.map((s) => ({ ...s, queue: q.name })))
+    .filter((s) => s.next)
+    .sort((a, b) => a.next! - b.next!)
+    .slice(0, 6);
+  const num = (n: number | undefined) => (n === undefined ? '—' : n);
   return (
     <Card>
-      <CardHeader title="Job queues" description="BullMQ queues on Redis" />
+      <CardHeader title="Job queues" description="Background work done by the worker container (BullMQ on Redis)" />
       <Table>
         <thead>
           <tr>
             <Th>Queue</Th>
             <Th className="text-right">Waiting</Th>
             <Th className="text-right">Active</Th>
+            <Th className="text-right" >
+              <span title="Waiting to retry, or held until later (not the recurring schedule)">Delayed</span>
+            </Th>
             <Th className="text-right">Failed</Th>
-            <Th className="text-right">Delayed</Th>
+            <Th className="hidden text-right sm:table-cell">
+              <span title="Recently completed jobs that are kept for inspection">Done</span>
+            </Th>
           </tr>
         </thead>
         <tbody>
-          {o.queues.map((q) => (
-            <tr key={q.name} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-              <Td>
-                <Link to={`/admin/queues/${q.name}`} className="font-medium text-zinc-900 hover:text-brand dark:text-zinc-100">
-                  {q.label}
-                </Link>
-                <span className="ml-2 inline-flex gap-1">
-                  {q.paused && (
-                    <Badge tone="warning">
-                      <Pause className="size-3" /> Paused
-                    </Badge>
-                  )}
-                  {q.phase > 1 && <Badge>Phase {q.phase}</Badge>}
-                  {!q.available && <Badge tone="danger">Unavailable</Badge>}
-                </span>
-              </Td>
-              <Td className="text-right tabular-nums">{q.counts?.waiting ?? '—'}</Td>
-              <Td className="text-right tabular-nums">{q.counts?.active ?? '—'}</Td>
-              <Td className="text-right tabular-nums">{q.counts?.failed ? <span className="font-medium text-red-600">{q.counts.failed}</span> : (q.counts?.failed ?? '—')}</Td>
-              <Td className="text-right tabular-nums">{q.counts?.delayed ?? '—'}</Td>
-            </tr>
-          ))}
+          {o.queues.map((q) => {
+            const stuck = q.available && q.workers === 0;
+            return (
+              <tr key={q.name} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                <Td>
+                  <Link to={`/admin/queues/${q.name}`} className="font-medium text-zinc-900 hover:text-brand dark:text-zinc-100">
+                    {q.label}
+                  </Link>
+                  <span className="ml-2 inline-flex gap-1">
+                    {q.paused && (
+                      <Badge tone="warning">
+                        <Pause className="size-3" /> Paused
+                      </Badge>
+                    )}
+                    {!q.available && <Badge tone="danger">Unavailable</Badge>}
+                  </span>
+                  <span className={cn('mt-0.5 flex items-center gap-1.5 text-xs', stuck ? 'text-red-600' : 'text-zinc-500')} title={q.description}>
+                    {q.available && q.workers !== null && <span className={cn('size-1.5 rounded-full', stuck ? 'bg-red-500' : 'bg-emerald-500')} />}
+                    {!q.available ? (q.error ?? 'Redis is not reachable') : stuck ? 'No worker running: jobs won’t be processed' : q.workers === null ? q.description : `${q.workers} worker${q.workers === 1 ? '' : 's'}${q.counts?.scheduled ? ` · ${q.counts.scheduled} scheduled` : ''}`}
+                  </span>
+                </Td>
+                <Td className={cn('text-right tabular-nums', stuck && (q.counts?.waiting ?? 0) > 0 && 'font-medium text-red-600')}>{num(q.counts?.waiting)}</Td>
+                <Td className="text-right tabular-nums">{num(q.counts?.active)}</Td>
+                <Td className="text-right tabular-nums">{num(q.counts?.delayed)}</Td>
+                <Td className="text-right tabular-nums">{q.counts?.failed ? <span className="font-medium text-red-600">{q.counts.failed}</span> : num(q.counts?.failed)}</Td>
+                <Td className="hidden text-right text-zinc-500 tabular-nums sm:table-cell">{num(q.counts?.completed)}</Td>
+              </tr>
+            );
+          })}
         </tbody>
       </Table>
+      {upcoming.length > 0 && (
+        <CardBody className="border-t border-zinc-100 dark:border-zinc-800">
+          <p className="mb-2 text-xs font-medium tracking-wide text-zinc-500 uppercase">Coming up</p>
+          <ul className="space-y-1.5 text-sm">
+            {upcoming.map((s) => (
+              <li key={`${s.queue}:${s.id}`} className="flex items-center gap-2">
+                <Clock className="size-3.5 shrink-0 text-zinc-400" />
+                <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                <span className="shrink-0 text-zinc-500 tabular-nums" title={new Date(s.next!).toLocaleString()}>
+                  {untilText(s.next!)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </CardBody>
+      )}
     </Card>
   );
+}
+
+/** "in 3 min", "in 2 h", "tomorrow 03:30". */
+function untilText(at: number) {
+  const ms = at - Date.now();
+  if (ms < 60_000) return 'in under a minute';
+  if (ms < 3_600_000) return `in ${Math.round(ms / 60_000)} min`;
+  const d = new Date(at);
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date().toDateString()) return `today ${time}`;
+  if (d.toDateString() === new Date(Date.now() + 86_400_000).toDateString()) return `tomorrow ${time}`;
+  return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 function Containers({ o }: { o: SystemOverview }) {

@@ -1,4 +1,4 @@
-import { Calendar, FolderOpen, Newspaper, Home, ListTodo, Mail, MessagesSquare, Settings2, UserCircle2, Users } from 'lucide-react';
+import { Calendar, FolderOpen, Newspaper, Home, ListTodo, Mail, MessagesSquare, Settings2, Users } from 'lucide-react';
 import type { LauncherApp } from '@forge/ui';
 import type { Feature, FeatureFlags } from './types';
 
@@ -14,7 +14,6 @@ export function launcherApps(isAdmin: boolean, features: FeatureFlags = { mail: 
     { id: 'drive', name: 'Drive', description: 'Files, folders and shared libraries', href: '/drive', icon: FolderOpen, color: 'bg-emerald-600', available: true },
     { id: 'sites', name: 'Sites', description: 'Intranet sites, wikis and news', href: '/sites', icon: Newspaper, color: 'bg-cyan-700', available: true },
     { id: 'team', name: 'Team', description: 'Chat, channels and meetings', href: '/team', icon: MessagesSquare, color: 'bg-violet-600', available: true },
-    { id: 'account', name: 'Account', description: 'Profile and security', href: '/account', icon: UserCircle2, color: 'bg-zinc-600', available: true },
     ...(isAdmin ? [{ id: 'admin', name: 'Admin', description: 'Admin center', href: '/admin', icon: Settings2, color: 'bg-amber-600', available: true }] : []),
   ] as LauncherApp[]).filter((a) => !needs[a.id] || features[needs[a.id]!]);
 }

@@ -2,7 +2,7 @@ import { access } from 'node:fs/promises';
 import { PORTAL, WEB_APPS } from '../gateway';
 import { runsAll } from '../services';
 import { loadavg, totalmem, freemem } from 'node:os';
-import { QUEUE_INFO, QUEUE_NAMES, VOLUME_SCAN_KEY, listHeartbeats, withTimeout, type QueueName, type VolumeScan } from '@forge/events';
+import { QUEUE_INFO, QUEUE_NAMES, SCHEDULE_LABELS, VOLUME_SCAN_KEY, listHeartbeats, withTimeout, type QueueName, type VolumeScan } from '@forge/events';
 import { diskUsage } from '@forge/storage';
 import type { AppContext } from '../context';
 import { listComposeContainers, type ContainerInfo } from './docker';
@@ -134,17 +134,28 @@ export async function queueOverview(ctx: AppContext) {
   return Promise.all(
     QUEUE_NAMES.map(async (name: QueueName) => {
       const info = { name, ...QUEUE_INFO[name] };
-      if (!ctx.queues) return { ...info, available: false, paused: false, counts: null };
+      if (!ctx.queues) return { ...info, available: false, paused: false, counts: null, workers: null, schedules: [] };
       const queue = ctx.queues[name];
       try {
-        const [counts, paused] = await withTimeout(
-          Promise.all([queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed', 'prioritized'), queue.isPaused()]),
+        const [counts, paused, workers, schedulers] = await withTimeout(
+          Promise.all([
+            queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed', 'prioritized'),
+            queue.isPaused(),
+            // Workers connected to this queue (0: nothing will run).
+            queue.getWorkersCount().catch(() => null),
+            queue.getJobSchedulers(0, 99, true).catch(() => []),
+          ]),
           2_000,
           `queue ${name}`,
         );
-        return { ...info, available: true, paused, counts };
+        const schedules = schedulers
+          .map((s) => ({ id: s.key, label: SCHEDULE_LABELS[s.key] ?? s.name, next: s.next ?? null, pattern: s.pattern ?? null, every: s.every ? Number(s.every) : null }))
+          .sort((a, b) => (a.next ?? Infinity) - (b.next ?? Infinity));
+        // Each recurring job waits as one delayed job until its next run: those are "scheduled", not delayed.
+        const scheduled = Math.min(counts.delayed ?? 0, schedules.length);
+        return { ...info, available: true, paused, workers, schedules, counts: { ...counts, delayed: (counts.delayed ?? 0) - scheduled, scheduled } };
       } catch (err) {
-        return { ...info, available: false, paused: false, counts: null, error: (err as Error).message };
+        return { ...info, available: false, paused: false, counts: null, workers: null, schedules: [], error: (err as Error).message };
       }
     }),
   );

@@ -161,12 +161,16 @@ export interface SystemOverview {
 export interface QueueSummary {
   name: string;
   label: string;
-  phase: number;
   description: string;
   available: boolean;
   paused: boolean;
   error?: string;
-  counts: Record<'waiting' | 'active' | 'completed' | 'failed' | 'delayed' | 'prioritized', number> | null;
+  /** Workers connected to the queue (0: jobs won't run); null if unknown. */
+  workers: number | null;
+  /** Recurring jobs and when each runs next. */
+  schedules: { id: string; label: string; next: number | null; pattern: string | null; every: number | null }[];
+  /** delayed: genuinely delayed (retries, later sends); scheduled: recurring jobs' next runs. */
+  counts: Record<'waiting' | 'active' | 'completed' | 'failed' | 'delayed' | 'prioritized' | 'scheduled', number> | null;
 }
 
 export interface QueueJob {

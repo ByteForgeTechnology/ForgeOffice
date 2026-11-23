@@ -45,7 +45,8 @@ export function adminSystemRoutes(app: App, ctx: AppContext) {
       const { state, start, limit } = req.query;
       const jobs = await q.getJobs([state as 'failed'], start, start + limit - 1, false);
       return {
-        items: jobs.filter(Boolean).map((j) => ({
+        // A recurring job's next run waits as a delayed job; the schedule lists those, so leave them out here.
+        items: jobs.filter((j) => j && !(state === 'delayed' && String(j.id).startsWith('repeat:'))).map((j) => ({
           id: j.id,
           name: j.name,
           data: j.data,

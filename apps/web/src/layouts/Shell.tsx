@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router';
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Camera, LogOut, Search, Settings2, ShieldCheck, UserCircle2, Users } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -38,14 +38,6 @@ export function Shell() {
             <span className="hidden truncate sm:inline">{branding?.name ?? 'ForgeOffice'}</span>
           </Link>
           <GlobalSearch />
-          {isAdmin && (
-            <NavLink
-              to="/admin"
-              className={({ isActive }) => cn('hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium hover:bg-white/15 md:flex', isActive && 'bg-white/15')}
-            >
-              <Settings2 className="size-4" /> Admin
-            </NavLink>
-          )}
           <UserMenu />
         </div>
       </header>

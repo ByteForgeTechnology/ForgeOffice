@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
-import { Alert, Badge, Button, Card, CardHeader, EmptyState, PageHeader, PageSpinner, cn, formatRelative, useToast } from '@forge/ui';
+import { Alert, Badge, Button, Card, CardHeader, EmptyState, PageHeader, PageSpinner, Table, Td, Th, cn, formatDateTime, formatRelative, useToast } from '@forge/ui';
 import { api, errorMessage } from '../../lib/api';
 import { useCan } from '../../lib/hooks';
 import type { QueueJob, SystemOverview } from '../../lib/types';
@@ -44,7 +44,12 @@ export function QueuePage() {
             {queue.label} {queue.paused && <Badge tone="warning">Paused</Badge>}
           </span>
         }
-        description={queue.description}
+        description={
+          <>
+            {queue.description}
+            {queue.available && queue.workers === 0 && <span className="mt-1 block font-medium text-red-600">No worker is running, so these jobs won’t be processed. Check the worker container.</span>}
+          </>
+        }
         actions={
           canManage &&
           queue.available && (
@@ -68,6 +73,29 @@ export function QueuePage() {
           )
         }
       />
+      {queue.schedules.length > 0 && (
+        <Card>
+          <CardHeader title="Schedule" description="Recurring jobs on this queue, and when each runs next" />
+          <Table>
+            <thead>
+              <tr>
+                <Th>Job</Th>
+                <Th>Runs</Th>
+                <Th>Next run</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {queue.schedules.map((s) => (
+                <tr key={s.id}>
+                  <Td className="font-medium">{s.label}</Td>
+                  <Td className="text-zinc-500">{s.every ? `every ${s.every >= 3_600_000 ? `${s.every / 3_600_000} h` : `${Math.round(s.every / 60_000)} min`}` : s.pattern ? <code className="text-xs">{s.pattern}</code> : '—'}</Td>
+                  <Td>{s.next ? formatDateTime(new Date(s.next).toISOString()) : '—'}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </Card>
+      )}
       {!queue.available && <Alert tone="warning">{queue.error ?? 'This queue is unavailable (is Redis configured?)'}</Alert>}
       <Card>
         <CardHeader

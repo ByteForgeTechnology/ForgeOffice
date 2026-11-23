@@ -40,12 +40,25 @@ export type JobData<Q extends QueueName, N extends JobName<Q> = JobName<Q>> = Qu
 
 export const QUEUE_NAMES: QueueName[] = ['backups', 'maintenance', 'mail-delivery', 'virus-scan', 'thumbnails'];
 
-export const QUEUE_INFO: Record<QueueName, { label: string; phase: number; description: string }> = {
-  backups: { label: 'Backups', phase: 1, description: 'Database dumps and volume tarballs into forge_backups' },
-  maintenance: { label: 'Maintenance', phase: 1, description: 'Purges, retention and volume usage scans' },
-  'mail-delivery': { label: 'Mail delivery', phase: 2, description: 'Outbound SMTP delivery with retries' },
-  'virus-scan': { label: 'Virus scanning', phase: 3, description: 'ClamAV scanning of uploaded blobs' },
-  thumbnails: { label: 'Thumbnails', phase: 3, description: 'Preview and thumbnail generation' },
+export const QUEUE_INFO: Record<QueueName, { label: string; description: string }> = {
+  backups: { label: 'Backups', description: 'Database dumps and volume archives into forge_backups' },
+  maintenance: { label: 'Maintenance', description: 'Retention and clean-up, disk usage scans, starred-item emails' },
+  'mail-delivery': { label: 'Mail delivery', description: 'Outgoing mail, with retries' },
+  'virus-scan': { label: 'Virus scanning', description: 'ClamAV scans of new Drive files' },
+  thumbnails: { label: 'Thumbnails', description: 'Drive thumbnails, previews and text for search' },
+};
+
+/** What each recurring job does, as people read it (by scheduler id). */
+export const SCHEDULE_LABELS: Record<string, string> = {
+  'nightly-backup': 'Scheduled backup',
+  'purge-expired-oidc': 'Remove expired sign-in records',
+  'scan-volumes': 'Measure disk usage',
+  'purge-deleted-users': 'Permanently remove deleted users',
+  'prune-audit-log': 'Trim the audit log',
+  'purge-drive-trash': 'Empty recycle bins (retention)',
+  'cleanup-drive-uploads': 'Clear abandoned uploads',
+  'star-notifications': 'Email changes to starred items',
+  'prune-backups': 'Delete old backups',
 };
 
 export const QUEUE_PREFIX = 'forge';
