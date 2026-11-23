@@ -1,5 +1,5 @@
 import { blobs, orm, type Database } from '@forge/db';
-import type { BlobStore } from '@forge/storage';
+import type { ObjectStore } from '@forge/storage';
 import { badRequest } from '../errors';
 
 const { eq, sql } = orm;
@@ -28,7 +28,7 @@ export function decodeImageDataUrl(dataUrl: string, maxBytes = MAX_LOGO_BYTES): 
 }
 
 /** Store bytes in the blob store and take a reference on the blob row. */
-export async function retainBlob(db: Database, store: BlobStore, volume: string, data: Buffer, mime: string | null): Promise<string> {
+export async function retainBlob(db: Database, store: Pick<ObjectStore, 'put' | 'delete'>, volume: string, data: Buffer, mime: string | null): Promise<string> {
   const { sha256, size } = await store.put(data);
   await db
     .insert(blobs)
@@ -38,7 +38,7 @@ export async function retainBlob(db: Database, store: BlobStore, volume: string,
 }
 
 /** Drop a reference; the file is deleted when nothing references it any more. */
-export async function releaseBlob(db: Database, store: BlobStore, sha256: string): Promise<void> {
+export async function releaseBlob(db: Database, store: Pick<ObjectStore, 'put' | 'delete'>, sha256: string): Promise<void> {
   const [row] = await db
     .update(blobs)
     .set({ refCount: sql`greatest(${blobs.refCount} - 1, 0)` })

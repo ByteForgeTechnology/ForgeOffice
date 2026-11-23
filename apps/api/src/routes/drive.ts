@@ -18,7 +18,6 @@ import {
   effectiveRole,
   emptyTrash,
   move,
-  previewPath,
   principalFor,
   purge,
   rename,
@@ -473,13 +472,9 @@ export function driveRoutes(app: App, ctx: AppContext) {
     const { verifyToken } = await import('@forge/drive');
     const claims = verifyToken<{ s: string }>(key(), req.params.token, 'thumb');
     if (!claims || !/^[a-f0-9]{64}$/.test(claims.s)) throw forbidden('This link has expired');
-    const { createReadStream } = await import('node:fs');
-    const { access } = await import('node:fs/promises');
-    const path = previewPath(ctx.drive, claims.s);
-    await access(path).catch(() => {
-      throw notFound('Thumbnail');
-    });
-    return reply.header('Content-Type', 'image/webp').header('Cache-Control', 'private, max-age=86400').send(createReadStream(path));
+    const webp = await ctx.drive.previews.get(claims.s);
+    if (!webp) throw notFound('Thumbnail');
+    return reply.header('Content-Type', 'image/webp').header('Cache-Control', 'private, max-age=86400').send(webp);
   });
 
   // ---------------------------------------------------------------------------

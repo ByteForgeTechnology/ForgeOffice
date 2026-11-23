@@ -234,7 +234,7 @@ describe('ForgeTeam', () => {
     await ask(bob, 'call:leave');
     const ended = await got(alice, 'message:updated', (p) => p.message.id === card.id && p.message.meta.endedAt);
     expect(ended.message.meta.participants.sort()).toEqual(['Alice', 'Bob']);
-    expect(server.ctx.team.media.rooms.size).toBe(0);
+    expect(await server.ctx.team.media.live()).toEqual([]);
     void meetingId;
   }, 30_000);
 

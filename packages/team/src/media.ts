@@ -18,6 +18,12 @@ export interface MediaConfig {
   minPort: number;
   maxPort: number;
   workers?: number;
+  /**
+   * One port (UDP and TCP) for every call instead of a range: worker n uses
+   * port + n. Easier to open in a firewall, and needed where ranges can't be
+   * published (Docker Swarm host-mode ports).
+   */
+  port?: number | null;
 }
 
 // Opus and VP8 everywhere (Safari included), so recordings can copy streams.
@@ -130,7 +136,10 @@ export class Room extends EventEmitter {
   async createTransport(peerId: string) {
     const peer = this.peer(peerId);
     if (peer.transports.size >= 4) throw new MediaError('Too many connections');
-    const transport = await this.router.createWebRtcTransport({
+    const webRtcServer = this.server.webRtcServerFor(this.router);
+    const transport = webRtcServer
+      ? await this.router.createWebRtcTransport({ webRtcServer, enableUdp: true, enableTcp: true, preferUdp: true, initialAvailableOutgoingBitrate: 1_000_000 })
+      : await this.router.createWebRtcTransport({
       listenInfos: [
         { protocol: 'udp', ip: this.server.config.listenIp, announcedAddress: this.server.config.announcedIp ?? undefined, portRange: { min: this.server.config.minPort, max: this.server.config.maxPort } },
         { protocol: 'tcp', ip: this.server.config.listenIp, announcedAddress: this.server.config.announcedIp ?? undefined, portRange: { min: this.server.config.minPort, max: this.server.config.maxPort } },
@@ -234,6 +243,8 @@ export class Room extends EventEmitter {
 export class MediaServer {
   readonly rooms = new Map<string, Room>();
   private workers: ms.Worker[] = [];
+  private readonly webRtcServers = new Map<ms.Worker, ms.WebRtcServer>();
+  private readonly routerWorker = new WeakMap<ms.Router, ms.Worker>();
   private next = 0;
   private starting: Promise<void> | null = null;
   private pending = new Map<string, Promise<Room>>();
@@ -250,6 +261,11 @@ export class MediaServer {
       const count = Math.max(1, Math.min(this.config.workers ?? 1, cpus().length));
       for (let i = 0; i < count; i++) {
         const worker = await mediasoup.createWorker({ logLevel: 'warn' });
+        if (this.config.port) {
+          const port = this.config.port + i;
+          const listen = (protocol: 'udp' | 'tcp') => ({ protocol, ip: this.config.listenIp, announcedAddress: this.config.announcedIp ?? undefined, port });
+          this.webRtcServers.set(worker, await worker.createWebRtcServer({ listenInfos: [listen('udp'), listen('tcp')] }));
+        }
         worker.on('died', (err) => {
           this.log.error({ err }, 'mediasoup worker died; its meetings ended');
           this.workers = this.workers.filter((w) => w !== worker);
@@ -271,6 +287,7 @@ export class MediaServer {
         await this.ensureWorkers();
         const worker = this.workers[this.next++ % this.workers.length]!;
         const router = await worker.createRouter({ mediaCodecs: MEDIA_CODECS });
+        this.routerWorker.set(router, worker);
         const room = new Room(id, router, this);
         this.rooms.set(id, room);
         return room;
@@ -278,6 +295,12 @@ export class MediaServer {
       this.pending.set(id, p);
     }
     return p;
+  }
+
+  /** The single-port server of the worker running this router (FORGE_RTC_PORT), if any. */
+  webRtcServerFor(router: ms.Router) {
+    const w = this.routerWorker.get(router);
+    return w ? (this.webRtcServers.get(w) ?? null) : null;
   }
 
   async close() {

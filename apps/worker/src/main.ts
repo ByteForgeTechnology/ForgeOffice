@@ -6,9 +6,9 @@ import { loadWorkerConfig } from './config';
 import { createBackupProcessor } from './processors/backup';
 import { createMaintenanceProcessor } from './processors/maintenance';
 import { createMailDeliveryProcessor } from './processors/mail';
-import { createMailContext } from '@forge/mail';
-import { join } from 'node:path';
-import { BlobStore } from '@forge/storage';
+import { createMailContext, mailStoreToken, readMasterSecret } from '@forge/mail';
+import { setupStorage } from '@forge/storage';
+import { replicaIndex, startSharedFileSync, syncSharedFiles } from '@forge/db';
 import type { DriveContext } from '@forge/drive';
 import { createScanProcessor, createThumbnailProcessor } from './processors/drive';
 
@@ -23,6 +23,14 @@ async function main() {
   redis.on('error', (err) => log.warn({ err: err.message }, 'redis connection error'));
   const bus = new EventBus(redis, redis.duplicate());
 
+  // Keys and certificates shared by every machine (DKIM keys for signing outgoing mail).
+  const secret = await readMasterSecret({ certsDir: config.volumes.certs.path });
+  if (!secret) throw new Error('The master secret is not available: set FORGE_SECRET (the same on every machine) or mount forge_certs');
+  await syncSharedFiles(dbHandle.db, secret, config.volumes.certs.path).catch((err) => log.warn({ err }, 'could not sync shared keys yet'));
+  const stopKeySync = startSharedFileSync(dbHandle.db, secret, config.volumes.certs.path, log);
+  // Storage: this machine's volumes, or the storage nodes (FORGE_STORE_NODES).
+  const storage = await setupStorage({ env: process.env, volumes: config.volumes, token: mailStoreToken(secret), redis: redis as never, index: replicaIndex(dbHandle.db), log });
+
   // Register repeatable jobs (idempotent: upsert by scheduler id).
   const maintenance = createQueue('maintenance', conn);
   const backupsQueue = createQueue('backups', conn);
@@ -33,6 +41,8 @@ async function main() {
   await maintenance.upsertJobScheduler('prune-audit-log', { pattern: '45 3 * * *', tz }, { name: 'prune-audit-log', data: { olderThanDays: config.auditRetentionDays } });
   await maintenance.upsertJobScheduler('purge-drive-trash', { pattern: '15 4 * * *', tz }, { name: 'purge-drive-trash', data: {} });
   await maintenance.upsertJobScheduler('cleanup-drive-uploads', { every: 60 * 60_000 }, { name: 'cleanup-drive-uploads', data: {} });
+  if (storage.cluster) await maintenance.upsertJobScheduler('storage-repair', { every: 10 * 60_000 }, { name: 'storage-repair', data: {} });
+  else await maintenance.removeJobScheduler('storage-repair');
   await maintenance.upsertJobScheduler('star-notifications', { every: 2 * 60_000 }, { name: 'star-notifications', data: {} });
   await maintenance.upsertJobScheduler('prune-backups', { pattern: '0 4 * * *', tz }, { name: 'prune-backups', data: { keep: config.backupRetention } });
   // BullMQ types scheduler ids as job names; this id intentionally differs.
@@ -49,6 +59,7 @@ async function main() {
     db: dbHandle.db,
     mailDir: config.volumes.mail.path,
     storeUrl: config.mailStoreUrl,
+    blobs: storage.mail,
     bus,
     deliveryQueue: createQueue('mail-delivery', conn),
     log,
@@ -61,16 +72,13 @@ async function main() {
     },
   });
 
-  // ForgeDrive: content-addressed files on forge_drive_data.
-  const driveBlobs = new BlobStore(join(config.volumes.drive.path, 'blobs'));
-  await driveBlobs.init();
-  const driveCtx: DriveContext = { db: dbHandle.db, blobs: driveBlobs, root: config.volumes.drive.path, log, redis: redis as unknown as DriveContext['redis'], clamav: config.clamav };
+  const driveCtx: DriveContext = { db: dbHandle.db, ...storage.drive, log, redis: redis as unknown as DriveContext['redis'], clamav: config.clamav };
   const thumbnailsQueue = createQueue('thumbnails', conn);
 
   const workers = [
     createWorker('mail-delivery', createMailDeliveryProcessor(mailCtx), conn, { concurrency: 8 }),
-    createWorker('backups', createBackupProcessor(dbHandle.db, config, bus, log), conn, { concurrency: 1, lockDuration: 10 * 60_000 }),
-    createWorker('maintenance', createMaintenanceProcessor(dbHandle.db, redis, config, mailCtx, driveCtx), conn, { concurrency: 2 }),
+    createWorker('backups', createBackupProcessor(dbHandle.db, config, bus, log, storage), conn, { concurrency: 1, lockDuration: 10 * 60_000 }),
+    createWorker('maintenance', createMaintenanceProcessor(dbHandle.db, redis, config, mailCtx, driveCtx, storage), conn, { concurrency: 2 }),
     createWorker('virus-scan', createScanProcessor(driveCtx, thumbnailsQueue), conn, { concurrency: 2 }),
     createWorker('thumbnails', createThumbnailProcessor(driveCtx), conn, { concurrency: 2 }),
   ];
@@ -85,6 +93,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     log.info({ signal }, 'shutting down worker');
     stopHeartbeat();
+    stopKeySync();
     await Promise.all(workers.map((w) => w.close()));
     await Promise.all([maintenance.close(), backupsQueue.close()]);
     redis.disconnect();

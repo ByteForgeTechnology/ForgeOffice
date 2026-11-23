@@ -1,3 +1,6 @@
+import { createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import type { StorageSetup } from '@forge/storage';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -47,7 +50,7 @@ function backupName(date = new Date()): string {
   return `forge-${date.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)}`;
 }
 
-export function createBackupProcessor(db: Database, config: WorkerConfig, bus: EventBus, log: { info: (o: unknown, m?: string) => void }) {
+export function createBackupProcessor(db: Database, config: WorkerConfig, bus: EventBus, log: { info: (o: unknown, m?: string) => void }, storage?: StorageSetup) {
   const publish = (backupId: string, status: string) => bus.publish('backup.updated', { backupId, status }).catch(() => {});
 
   return async (job: Job<JobData<'backups', 'create-backup'>>) => {
@@ -78,6 +81,18 @@ export function createBackupProcessor(db: Database, config: WorkerConfig, bus: E
 
       for (const key of BACKUP_VOLUMES) {
         const volume = config.volumes[key];
+        // On storage nodes: each node sends an archive of its share (its copies).
+        const ns = key as 'mail' | 'drive' | 'team';
+        if (storage?.cluster && storage.registry && ns in storage.cluster) {
+          for (const node of (await storage.registry.nodes()).filter((n) => n.namespaces.includes(ns))) {
+            const name = `${key}-${node.id}.tar.gz`;
+            const file = join(partial, name);
+            await pipeline(await storage.cluster[ns].snapshot(node), createWriteStream(file, { mode: 0o600 }));
+            manifest.artifacts.push({ name, kind: 'volume', source: `${volume.volume} on ${node.id}`, bytes: (await stat(file)).size, sha256: await sha256File(file) });
+          }
+          await job.updateProgress(Math.round((++done / steps) * 100));
+          continue;
+        }
         const file = join(partial, `${key}.tar.gz`);
         await mkdir(volume.path, { recursive: true }); // an unused volume yields an empty archive
         // GNU tar exits 1 when files change during the read; the archive is still valid.

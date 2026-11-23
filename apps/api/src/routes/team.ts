@@ -580,7 +580,7 @@ export function teamRoutes(app: App, ctx: AppContext) {
   // Meetings and recordings
   // ---------------------------------------------------------------------------
 
-  const serialiseMeeting = (m: Meeting) => ({ id: m.id, code: m.code, title: m.title, channelId: m.channelId, startedAt: m.startedAt, endedAt: m.endedAt, url: `${ctx.config.publicUrl}/team/meet/${m.code}`, active: !!ctx.team.media.rooms.get(m.id) });
+  const serialiseMeeting = async (m: Meeting) => ({ id: m.id, code: m.code, title: m.title, channelId: m.channelId, startedAt: m.startedAt, endedAt: m.endedAt, url: `${ctx.config.publicUrl}/team/meet/${m.code}`, active: !!(await ctx.team.media.directory.nodeFor(m.id)) });
 
   app.post(
     '/api/v1/team/meetings',
@@ -597,7 +597,7 @@ export function teamRoutes(app: App, ctx: AppContext) {
         await broadcast(channel, 'message:new', { message: msg, channel: { id: channel.id, kind: channel.kind, teamId: channel.teamId, name: channel.name } });
       }
       reply.code(201);
-      return { meeting: serialiseMeeting(meeting!) };
+      return { meeting: await serialiseMeeting(meeting!) };
     },
   );
 
@@ -606,8 +606,8 @@ export function teamRoutes(app: App, ctx: AppContext) {
     if (!meeting || meeting.orgId !== me(req).orgId) throw notFound('Meeting');
     if (meeting.channelId) await access(req, meeting.channelId);
     const settings = await teamSettings(ctx, meeting.orgId);
-    const room = ctx.team.media.rooms.get(meeting.id);
-    return { meeting: serialiseMeeting(meeting), participants: room?.peerInfos().map((p) => ({ name: p.name, guest: p.guest })) ?? [], recordingAllowed: settings.recording, guestAccess: settings.guestAccess };
+    const info = await ctx.team.media.info(meeting.id);
+    return { meeting: await serialiseMeeting(meeting), participants: info?.peers.map((p) => ({ name: p.name, guest: p.guest })) ?? [], recordingAllowed: settings.recording, guestAccess: settings.guestAccess };
   });
 
   /** People outside the organisation: the meeting's title, and a guest pass to wait in its lobby. */
@@ -646,9 +646,12 @@ export function teamRoutes(app: App, ctx: AppContext) {
     if (!claims) throw forbidden('This link has expired');
     const [rec] = await db.select().from(recordings).where(eq(recordings.id, claims.r)).limit(1);
     if (!rec) throw notFound('Recording');
-    const path = join(ctx.config.volumes.team.path, rec.path);
-    const size = (await stat(path).catch(() => null))?.size;
+    // Recordings are in storage ("blob:<sha256>"); older ones are files on forge_team_media.
+    const sha = rec.path.startsWith('blob:') ? rec.path.slice(5) : null;
+    const path = sha ? null : join(ctx.config.volumes.team.path, rec.path);
+    const size = sha ? await ctx.team.recordings.size(sha).catch(() => 0) : (await stat(path!).catch(() => null))?.size;
     if (!size) throw notFound('Recording');
+    const open = (range?: { start: number; end: number }) => (sha ? ctx.team.recordings.createReadStream(sha, range) : createReadStream(path!, range));
     reply.header('Accept-Ranges', 'bytes').header('Content-Type', 'video/webm').header('Cache-Control', 'private, max-age=3600');
     if (req.query.download) reply.header('Content-Disposition', `attachment; filename="recording-${rec.createdAt.toISOString().slice(0, 16).replace(/[:T]/g, '-')}.webm"`);
     const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
@@ -656,9 +659,9 @@ export function teamRoutes(app: App, ctx: AppContext) {
       const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
       const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
       if (start >= size || start > end) return reply.code(416).header('Content-Range', `bytes */${size}`).send();
-      return reply.code(206).header('Content-Range', `bytes ${start}-${end}/${size}`).header('Content-Length', end - start + 1).send(createReadStream(path, { start, end }));
+      return reply.code(206).header('Content-Range', `bytes ${start}-${end}/${size}`).header('Content-Length', end - start + 1).send(open({ start, end }));
     }
-    return reply.header('Content-Length', size).send(createReadStream(path));
+    return reply.header('Content-Length', size).send(open());
   });
 
 }

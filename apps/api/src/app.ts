@@ -60,6 +60,7 @@ const SERVICE_ROUTES: Record<ServiceName, Registrar[]> = {
   tasks: [taskRoutes],
   drive: [driveRoutes, drivePublicRoutes, siteRoutes, starRoutes, adminDriveRoutes],
   team: [teamRoutes, adminTeamRoutes],
+  media: [],
 };
 
 /** Route groups that belong to an optional product (Admin → Organisation → Features). DAV checks per collection. */

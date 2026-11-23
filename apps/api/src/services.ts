@@ -4,7 +4,7 @@
  * requests to the right container. "all" runs everything in one process
  * (development, tests and small single-container installs).
  */
-export const SERVICE_NAMES = ['directory', 'mail', 'calendar', 'contacts', 'tasks', 'drive', 'team'] as const;
+export const SERVICE_NAMES = ['directory', 'mail', 'calendar', 'contacts', 'tasks', 'drive', 'team', 'media'] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 
 /** Internal port of each service's container (also published on the host). */
@@ -16,6 +16,8 @@ export const SERVICE_PORTS: Record<ServiceName, number> = {
   tasks: 8095,
   drive: 8097,
   team: 8098,
+  /** Meeting media server (SFU); no HTTP routes of its own besides health. */
+  media: 8099,
 };
 
 export function parseServices(value: string | undefined): Set<ServiceName> {

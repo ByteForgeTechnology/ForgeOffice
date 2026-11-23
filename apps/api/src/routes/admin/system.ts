@@ -1,7 +1,8 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Type } from 'typebox';
-import { backups, orm } from '@forge/db';
+import { backups, forgetNode, orm, replicaStats, underReplicated as underReplicated_ } from '@forge/db';
+import { DRAINING_SET } from '@forge/storage';
 import { QUEUE_NAMES, type QueueName } from '@forge/events';
 import type { AppContext } from '../../context';
 import { HttpError, conflict, notFound } from '../../errors';
@@ -161,4 +162,54 @@ export function adminSystemRoutes(app: App, ctx: AppContext) {
       return { ok: true };
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // Cluster: storage nodes and media servers (several machines)
+  // ---------------------------------------------------------------------------
+
+  app.get('/api/v1/admin/system/cluster', { preHandler: requirePermission(ctx, 'system:read'), schema: { tags: ['admin: system'], summary: 'Storage nodes, copies of files, and media servers' } }, async () => {
+    const storage = ctx.storage;
+    const nodes = storage.registry ? await storage.registry.nodes() : [];
+    const live = new Set(nodes.map((n) => n.id));
+    const stats = storage.cluster ? await replicaStats(ctx.db) : [];
+    // Nodes the index still lists but that aren't announcing themselves: down, or gone for good.
+    const missing = [...new Set(stats.map((s) => s.nodeId))].filter((id) => !live.has(id));
+    const replicas = ctx.config.storage.replicas;
+    const want = Math.min(replicas, nodes.filter((n) => !n.draining).length);
+    let underReplicated = 0;
+    if (storage.cluster && want > 0) for (const ns of ['mail', 'drive', 'team']) underReplicated += (await underReplicated_(ctx.db, ns, nodes.filter((n) => !n.draining && n.namespaces.includes(ns)).map((n) => n.id), want, 10_000)).length;
+    return {
+      storage: {
+        mode: storage.mode,
+        replicas,
+        underReplicated,
+        nodes: [
+          ...nodes.map((n) => ({ id: n.id, url: n.url, online: true, draining: n.draining, namespaces: n.namespaces, freeBytes: n.freeBytes, totalBytes: n.totalBytes, blobs: Object.fromEntries(stats.filter((s) => s.nodeId === n.id).map((s) => [s.namespace, s.blobs])) })),
+          ...missing.map((id) => ({ id, url: null, online: false, draining: false, namespaces: [], freeBytes: 0, totalBytes: 0, blobs: Object.fromEntries(stats.filter((s) => s.nodeId === id).map((s) => [s.namespace, s.blobs])) })),
+        ],
+      },
+      media: (await ctx.team.media.directory.nodes()).map((n) => ({ id: n.id, address: n.address, meetings: n.meetings.length, people: n.peers, seenAt: n.seenAt })),
+    };
+  });
+
+  app.put(
+    '/api/v1/admin/system/storage/:id',
+    { preHandler: requirePermission(ctx, 'system:manage'), schema: { tags: ['admin: system'], summary: 'Retire a storage node (its files are copied elsewhere, then removed from it) or bring it back', params: Type.Object({ id: Type.String({ pattern: '^[a-z0-9-]{4,64}$' }) }), body: Type.Object({ draining: Type.Boolean() }) } },
+    async (req) => {
+      if (!ctx.redis) throw new HttpError(400, 'Storage nodes need Redis', 'no_redis');
+      if (req.body.draining) await ctx.redis.sadd(DRAINING_SET, req.params.id);
+      else await ctx.redis.srem(DRAINING_SET, req.params.id);
+      await ctx.audit.fromRequest(req, { action: req.body.draining ? 'storage.node_retiring' : 'storage.node_restored', targetType: 'storage_node', targetId: req.params.id, targetLabel: req.params.id });
+      return { ok: true };
+    },
+  );
+
+  app.delete('/api/v1/admin/system/storage/:id', { preHandler: requirePermission(ctx, 'system:manage'), schema: { tags: ['admin: system'], summary: 'Forget a storage node that is gone for good (its copies are made again from the others)', params: Type.Object({ id: Type.String({ pattern: '^[a-z0-9-]{4,64}$' }) }) } }, async (req) => {
+    const nodes = ctx.storage.registry ? await ctx.storage.registry.nodes() : [];
+    if (nodes.some((n) => n.id === req.params.id)) throw conflict('That node is still running: retire it first, then stop it');
+    await forgetNode(ctx.db, req.params.id);
+    await ctx.redis?.srem(DRAINING_SET, req.params.id);
+    await ctx.audit.fromRequest(req, { action: 'storage.node_forgotten', targetType: 'storage_node', targetId: req.params.id, targetLabel: req.params.id });
+    return { ok: true };
+  });
 }

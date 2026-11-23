@@ -19,7 +19,7 @@ import {
   ensureGroupLibrary,
   ensurePersonalLibrary,
   move,
-  previewPath,
+  localDriveStores,
   principalFor,
   processVersion,
   purge,
@@ -72,7 +72,7 @@ beforeAll(async () => {
   org = o!.id;
   const store = new BlobStore(join(root, 'blobs'));
   await store.init();
-  ctx = { db, blobs: store, root, log: { info: () => {}, warn: () => {}, error: () => {} } };
+  ctx = { db, blobs: store, ...localDriveStores(root, store), log: { info: () => {}, warn: () => {}, error: () => {} } };
   alice = await user('alice');
   bob = await user('bob');
   mine = await ensurePersonalLibrary(db, alice);
@@ -263,7 +263,7 @@ describe('scanning and previews', () => {
     const png = await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#4f46e5' } }).png().toBuffer();
     const img = await storeFile(ctx, { lib: mine, parentId: null, name: 'photo.png', source: png, userId: alice.id });
     expect(await processVersion(ctx, { itemId: img.item.id, versionId: img.version.id })).toMatchObject({ thumbnail: true });
-    const meta = await sharp((await readFile(previewPath(ctx, img.item.sha256!))) as Buffer).metadata();
+    const meta = await sharp((await ctx.previews.get(img.item.sha256!))!).metadata();
     expect(meta).toMatchObject({ format: 'webp', width: 480 });
 
     const pdf = await storeFile(ctx, { lib: mine, parentId: null, name: 'invoice.pdf', source: minimalPdf('Quarterly invoice ZEBRA-9'), userId: alice.id });

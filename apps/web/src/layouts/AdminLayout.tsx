@@ -22,6 +22,7 @@ import {
   Signature,
   Users,
   Video,
+  Server,
   UsersRound,
   type LucideIcon,
 } from 'lucide-react';
@@ -199,6 +200,12 @@ export const ADMIN_NAV: NavSection[] = [
         label: 'Features',
         icon: ToggleRight,
         perm: 'org:read',
+      },
+      {
+        to: '/admin/organisation/servers',
+        label: 'Servers & storage',
+        icon: Server,
+        perm: 'system:read',
       },
       {
         to: '/admin/organisation/domains',

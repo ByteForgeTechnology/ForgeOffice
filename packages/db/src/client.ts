@@ -54,7 +54,17 @@ export async function connectDatabase(url: string, opts: { max?: number } = {}):
   return {
     db: db as unknown as Database,
     driver: 'postgres',
-    migrate: (folder) => migrate(db, { migrationsFolder: folder }),
+    // Several directory services may start together (several machines): one migrates, the others wait.
+    migrate: async (folder) => {
+      const conn = await client.reserve();
+      try {
+        await conn`select pg_advisory_lock(7140512)`;
+        await migrate(db, { migrationsFolder: folder });
+      } finally {
+        await conn`select pg_advisory_unlock(7140512)`.catch(() => {});
+        conn.release();
+      }
+    },
     ping: async () => {
       await client`select 1`;
     },

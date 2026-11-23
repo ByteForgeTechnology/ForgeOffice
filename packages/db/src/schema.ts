@@ -1,20 +1,5 @@
 import { sql } from 'drizzle-orm';
-import {
-  type AnyPgColumn,
-  bigint,
-  bigserial,
-  boolean,
-  index,
-  integer,
-  jsonb,
-  pgEnum,
-  pgTable,
-  primaryKey,
-  text,
-  timestamp,
-  uniqueIndex,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, bigint, bigserial, boolean, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () =>
@@ -345,6 +330,35 @@ export const blobs = pgTable('blobs', {
   mime: text('mime'),
   refCount: integer('ref_count').notNull().default(0),
   createdAt: createdAt(),
+});
+
+/**
+ * Where blobs are kept when storage runs on several nodes: one row per copy.
+ * Namespaces: mail, drive, team. The worker's repair job keeps every blob on
+ * enough live nodes.
+ */
+export const blobReplicas = pgTable(
+  'blob_replicas',
+  {
+    namespace: text('namespace').notNull(),
+    sha256: text('sha256').notNull(),
+    nodeId: text('node_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.namespace, t.sha256, t.nodeId] }), index('blob_replicas_node_idx').on(t.nodeId, t.namespace)],
+);
+
+/**
+ * Keys and certificates every machine needs (OIDC signing keys, DKIM keys,
+ * TLS certificates, the setup token), encrypted with the master secret. Each
+ * machine copies them into its certs directory, so they need not share a volume.
+ * The "__fingerprint" row checks that every machine has the same master secret.
+ */
+export const sharedFiles = pgTable('shared_files', {
+  path: text('path').primaryKey(),
+  /** base64 of iv | tag | AES-256-GCM ciphertext (plain text for __fingerprint). */
+  value: text('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ---------------------------------------------------------------------------

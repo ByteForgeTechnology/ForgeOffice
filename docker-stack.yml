@@ -1,0 +1,189 @@
+# ForgeOffice on Docker Swarm: several machines, several copies of a service.
+#
+#   1. On one machine:  docker swarm init        (others: docker swarm join …)
+#   2. Label the machines for the parts that keep data or need fixed ports:
+#        docker node update --label-add forge.db=true      <machine>   # Postgres + Redis (one machine)
+#        docker node update --label-add forge.store=true   <machine>   # storage node (one per labelled machine)
+#        docker node update --label-add forge.media=true   <machine>   # meeting server (one per labelled machine)
+#        docker node update --label-add forge.mail=true    <machine>   # SMTP/IMAP ports 25/587/465/143/993
+#   3. Build the image and push it where every machine can pull it:
+#        docker build -f docker/Dockerfile -t registry.example.com/forgeoffice:1.0 . && docker push …
+#   4. Deploy (stack deploy reads variables from the shell, not .env):
+#        set -a; . ./.env; set +a
+#        docker stack deploy -c docker-stack.yml forge
+#   Scale any stateless service:  docker service scale forge_mail-api=3
+#
+# .env must set FORGE_SECRET (the same everywhere), POSTGRES_PASSWORD,
+# FORGE_PUBLIC_URL, FORGE_IMAGE, and for meetings FORGE_RTC_ANNOUNCED_MAP
+# (hostname=public-ip for each media machine). See README → Several machines.
+
+x-image: &image
+  image: ${FORGE_IMAGE:?set FORGE_IMAGE to the image in your registry}
+  env_file: .env
+  networks: [forge]
+
+x-env: &env
+  DATABASE_URL: postgres://${POSTGRES_USER:-forge}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-forge}
+  REDIS_URL: redis://redis:6379
+  FORGE_DATA_ROOT: /data
+  FORGE_SECRET: ${FORGE_SECRET:?set FORGE_SECRET (the same on every machine)}
+  # Storage nodes announce themselves in Redis; this one name is a starting point.
+  FORGE_STORE_NODES: http://store:8096
+  FORGE_STORE_REPLICAS: ${FORGE_STORE_REPLICAS:-2}
+  FORGE_MAIL_EMBED: "false"
+  FORGE_WOPI_URL: ${FORGE_WOPI_URL:-http://drive-api:8097}
+  FORGE_OFFICE_INTERNAL_URL: ${FORGE_OFFICE_INTERNAL_URL:-http://office}
+
+x-deploy: &deploy
+  restart_policy: { condition: any, delay: 5s }
+  update_config: { parallelism: 1, order: start-first, failure_action: rollback }
+
+x-api: &api
+  <<: *image
+  command: ["node", "apps/api/dist/main.js"]
+  volumes: [forge_certs:/data/certs]
+
+x-web: &web
+  <<: *image
+  command: ["node", "apps/web/serve.mjs"]
+
+services:
+  gateway:
+    image: caddy:2-alpine
+    networks: [forge]
+    ports: ["${FORGE_HTTP_PORT:-8080}:8080"] # the routing mesh: any machine's address works
+    configs: [{ source: caddyfile, target: /etc/caddy/Caddyfile }]
+    deploy: { <<: *deploy, replicas: "${FORGE_GATEWAY_REPLICAS:-2}" }
+
+  # ---------------------------------------------------------------- web apps
+  portal-web: { <<: *web, environment: { FORGE_WEB_APP: portal, PORT: 8081, HEALTH_PATH: /healthz }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+  mail-web: { <<: *web, environment: { FORGE_WEB_APP: mail, PORT: 8082, HEALTH_PATH: /healthz }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+  calendar-web: { <<: *web, environment: { FORGE_WEB_APP: calendar, PORT: 8083, HEALTH_PATH: /healthz }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+  contacts-web: { <<: *web, environment: { FORGE_WEB_APP: contacts, PORT: 8084, HEALTH_PATH: /healthz }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+  tasks-web: { <<: *web, environment: { FORGE_WEB_APP: tasks, PORT: 8085, HEALTH_PATH: /healthz }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+  admin-web: { <<: *web, environment: { FORGE_WEB_APP: admin, PORT: 8086, HEALTH_PATH: /healthz }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+  drive-web: { <<: *web, environment: { FORGE_WEB_APP: drive, PORT: 8087, HEALTH_PATH: /healthz, FORGE_FRAME_SOURCES: "${FORGE_OFFICE_URL:-}" }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+  sites-web: { <<: *web, environment: { FORGE_WEB_APP: sites, PORT: 8088, HEALTH_PATH: /healthz }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+  team-web: { <<: *web, environment: { FORGE_WEB_APP: team, PORT: 8089, HEALTH_PATH: /healthz }, deploy: { <<: *deploy, replicas: "${FORGE_WEB_REPLICAS:-2}" } }
+
+  # --------------------------------------------------------- back-end services
+  # Any number of copies of each: they share Postgres and Redis, real-time
+  # events fan out through Redis, and files are on the storage nodes.
+  directory:
+    <<: *api
+    # Several may start at once: one applies migrations, the others wait.
+    environment: { <<: *env, FORGE_SERVICES: directory, PORT: 8091, FORGE_WEB_DIR: /app/apps/web/dist/portal }
+    deploy: { <<: *deploy, replicas: "${FORGE_DIRECTORY_REPLICAS:-2}" }
+  mail-api: { <<: *api, environment: { <<: *env, FORGE_SERVICES: mail, PORT: 8092 }, deploy: { <<: *deploy, replicas: "${FORGE_MAIL_API_REPLICAS:-2}" } }
+  calendar-api: { <<: *api, environment: { <<: *env, FORGE_SERVICES: calendar, PORT: 8093 }, deploy: { <<: *deploy, replicas: "${FORGE_CALENDAR_API_REPLICAS:-2}" } }
+  contacts-api: { <<: *api, environment: { <<: *env, FORGE_SERVICES: contacts, PORT: 8094 }, deploy: { <<: *deploy, replicas: "${FORGE_CONTACTS_API_REPLICAS:-1}" } }
+  tasks-api: { <<: *api, environment: { <<: *env, FORGE_SERVICES: tasks, PORT: 8095 }, deploy: { <<: *deploy, replicas: "${FORGE_TASKS_API_REPLICAS:-1}" } }
+  drive-api: { <<: *api, environment: { <<: *env, FORGE_SERVICES: drive, PORT: 8097 }, deploy: { <<: *deploy, replicas: "${FORGE_DRIVE_API_REPLICAS:-2}" } }
+  team-api: { <<: *api, environment: { <<: *env, FORGE_SERVICES: team, PORT: 8098 }, deploy: { <<: *deploy, replicas: "${FORGE_TEAM_API_REPLICAS:-2}" } }
+
+  worker:
+    <<: *image
+    command: ["node", "apps/worker/dist/main.js"]
+    environment: *env
+    healthcheck: { disable: true } # no HTTP port to check
+    volumes: [forge_certs:/data/certs, forge_backups:/data/backups]
+    deploy: { <<: *deploy, replicas: "${FORGE_WORKER_REPLICAS:-1}" }
+
+  # ------------------------------------------------- one per labelled machine
+  # Storage node: each keeps its own disks (local volumes on that machine).
+  store:
+    <<: *image
+    command: ["node", "apps/mailstore/dist/main.js"]
+    environment:
+      FORGE_DATA_ROOT: /data
+      PORT: 8096
+      HEALTH_PATH: /healthz
+      REDIS_URL: redis://redis:6379
+      FORGE_SECRET: ${FORGE_SECRET}
+      # How the other services reach this copy (its task name on the overlay network).
+      FORGE_STORE_URL: "http://{{.Task.Name}}:8096"
+    volumes: [forge_mail_data:/data/mail, forge_drive_data:/data/drive, forge_team_media:/data/team]
+    deploy:
+      <<: *deploy
+      mode: global
+      placement: { constraints: [node.labels.forge.store == true] }
+      update_config: { parallelism: 1, order: stop-first }
+
+  # Meeting server: browsers send media straight to this machine's ports.
+  media:
+    <<: *api
+    environment:
+      <<: *env
+      FORGE_SERVICES: media
+      PORT: 8099
+      FORGE_NODE_HOSTNAME: "{{.Node.Hostname}}"
+      FORGE_MEDIA_NODE_ID: "media-{{.Node.Hostname}}"
+      FORGE_RTC_ANNOUNCED_MAP: ${FORGE_RTC_ANNOUNCED_MAP:-}
+      # Every call on this machine through one port (UDP, and TCP as a fallback).
+      FORGE_RTC_PORT: 40000
+    ports:
+      # Host mode: browsers must reach this machine itself, not any node of the swarm.
+      - { target: 40000, published: 40000, protocol: udp, mode: host }
+      - { target: 40000, published: 40000, protocol: tcp, mode: host }
+    deploy:
+      <<: *deploy
+      mode: global
+      placement: { constraints: [node.labels.forge.media == true] }
+
+  # SMTP and IMAP on labelled machines, with the client's real address (host ports).
+  smtp:
+    <<: *image
+    command: ["node", "apps/mailserver/dist/main.js"]
+    environment: { <<: *env, FORGE_MAIL_ROLE: smtp, FORGE_IMAP_PORT: "off", FORGE_IMAPS_PORT: "off" }
+    healthcheck: { disable: true }
+    volumes: [forge_certs:/data/certs]
+    ports:
+      - { target: 25, published: 25, mode: host }
+      - { target: 587, published: 587, mode: host }
+      - { target: 465, published: 465, mode: host }
+    deploy: { <<: *deploy, mode: global, placement: { constraints: [node.labels.forge.mail == true] } }
+  imap:
+    <<: *image
+    command: ["node", "apps/mailserver/dist/main.js"]
+    environment: { <<: *env, FORGE_MAIL_ROLE: imap, FORGE_SMTP_PORT: "off", FORGE_SUBMISSION_PORT: "off", FORGE_SUBMISSIONS_PORT: "off" }
+    healthcheck: { disable: true }
+    volumes: [forge_certs:/data/certs]
+    ports:
+      - { target: 143, published: 143, mode: host }
+      - { target: 993, published: 993, mode: host }
+    deploy: { <<: *deploy, mode: global, placement: { constraints: [node.labels.forge.mail == true] } }
+
+  # ------------------------------------------------------------- data stores
+  db:
+    image: postgres:17-alpine
+    networks: [forge]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-forge}
+    volumes: [forge_db_data:/var/lib/postgresql/data]
+    deploy: { restart_policy: { condition: any }, placement: { constraints: [node.labels.forge.db == true] } }
+  redis:
+    image: redis:7-alpine
+    networks: [forge]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes: [forge_redis_data:/data]
+    deploy: { restart_policy: { condition: any }, placement: { constraints: [node.labels.forge.db == true] } }
+
+networks:
+  forge:
+    driver: overlay
+    attachable: true
+
+configs:
+  caddyfile:
+    file: ./docker/gateway/Caddyfile
+
+volumes:
+  forge_db_data:
+  forge_redis_data:
+  forge_mail_data:
+  forge_drive_data:
+  forge_team_media:
+  forge_certs:
+  forge_backups:

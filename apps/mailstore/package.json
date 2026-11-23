@@ -14,7 +14,8 @@
     "@forge/auth": "workspace:*",
     "@forge/mail": "workspace:*",
     "@forge/storage": "workspace:*",
-    "pino": "^10.4.0"
+    "pino": "^10.4.0",
+    "@forge/events": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^9.0.0",

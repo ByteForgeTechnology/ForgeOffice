@@ -75,7 +75,7 @@ RUN mkdir -p /data/mail /data/drive /data/team /data/certs /data/backups \
  && chown -R node:node /data \
  && chmod 700 /data/certs
 USER node
-EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8089 8091 8092 8093 8094 8095 8096 8097 8098 40000-40099/udp 40000-40099/tcp 25 587 465 143 993
+EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8089 8091 8092 8093 8094 8095 8096 8097 8098 8099 40000-40099/udp 40000-40099/tcp 25 587 465 143 993
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "apps/api/dist/main.js"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \

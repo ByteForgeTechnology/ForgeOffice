@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { driveActivity, driveItems, driveLibraries, drivePermissions, driveVersions, orm, organizations, users, type DriveItem, type DriveLibrary } from '@forge/db';
+import { blobs, driveActivity, driveItems, driveLibraries, drivePermissions, driveVersions, orm, organizations, users, type DriveItem, type DriveLibrary } from '@forge/db';
 import { release, retain, withLock, type DriveContext } from './context';
 
 const { and, asc, desc, eq, inArray, isNotNull, isNull, lt, sql } = orm;
@@ -165,7 +165,8 @@ export interface StoreFileInput {
   parentId: string | null;
   name: string;
   mime?: string | null;
-  source: Readable | Buffer;
+  /** The content, or a blob already in the store (a finished upload). */
+  source: Readable | Buffer | { sha256: string; size: number };
   userId: string;
   /** Save as a new version of this file. */
   itemId?: string;
@@ -183,10 +184,18 @@ export async function storeFile(ctx: DriveContext, input: StoreFileInput) {
   const { lib, userId } = input;
   await checkParent(ctx, lib.id, input.parentId);
   const name = checkName(input.name);
-  const put = await ctx.blobs.put(input.source, { maxBytes: input.maxBytes }).catch((err: Error) => {
-    if (err.name === 'BlobTooLargeError') throw new DriveError(413, err.message, 'too_large');
-    throw err;
-  });
+  const stored = 'sha256' in input.source && !Buffer.isBuffer(input.source) ? input.source : null;
+  const put = stored
+    ? // Already stored (by the upload store): "created" if nothing else uses that content yet.
+      { sha256: stored.sha256, size: stored.size, created: !(await ctx.db.select({ s: blobs.sha256 }).from(blobs).where(eq(blobs.sha256, stored.sha256)).limit(1)).length }
+    : await ctx.blobs.put(input.source as Readable | Buffer, { maxBytes: input.maxBytes }).catch((err: Error) => {
+        if (err.name === 'BlobTooLargeError') throw new DriveError(413, err.message, 'too_large');
+        throw err;
+      });
+  if (stored && input.maxBytes !== undefined && put.size > input.maxBytes) {
+    if (put.created) await ctx.blobs.delete(put.sha256).catch(() => {});
+    throw new DriveError(413, `Files can be at most ${Math.round(input.maxBytes / 1048576)} MB`, 'too_large');
+  }
   const mime = mimeFor(name, input.mime);
   try {
     await checkQuota(ctx, lib, put.size);

@@ -1,6 +1,6 @@
 import { Type } from 'typebox';
 import { BUILTIN_ROLES, GLOBAL_ADMIN, safeEqual } from '@forge/auth';
-import { domains, organizations, orm, users } from '@forge/db';
+import { domains, organizations, orm, removeSharedFile, users } from '@forge/db';
 import type { AppContext } from '../context';
 import { HttpError, badRequest, notFound } from '../errors';
 import { discardSetupToken } from '../secrets';
@@ -140,6 +140,8 @@ export function publicRoutes(app: App, ctx: AppContext) {
 
       ctx.setupToken = null;
       await discardSetupToken(ctx.config.volumes.certs.path);
+      // …on every machine.
+      await removeSharedFile(ctx.db, ctx.config.volumes.certs.path, 'setup-token');
       await ctx.audit.record({
         action: 'setup.completed',
         orgId: result.org.id,

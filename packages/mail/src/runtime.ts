@@ -17,6 +17,8 @@ export interface MailRuntimeOptions {
   mailDir: string;
   /** The mail-store service, e.g. http://mail-store:8096 (production: the only container mounting mailbox storage). */
   storeUrl?: string | null;
+  /** Mailbox storage chosen by the caller (setupStorage: local, or the storage cluster). Wins over storeUrl. */
+  blobs?: ContentStore | null;
   bus: EventBus | null;
   events?: EventEmitter;
   deliveryQueue: TypedQueue<'mail-delivery'> | null;
@@ -41,7 +43,9 @@ export async function readMasterSecret(config: Pick<MailConfig, 'masterSecret' |
 /** Build the shared mail context (used by the API, worker and mail server). */
 export async function createMailContext(opts: MailRuntimeOptions): Promise<MailContext> {
   let blobs: ContentStore;
-  if (opts.storeUrl) {
+  if (opts.blobs) {
+    blobs = opts.blobs;
+  } else if (opts.storeUrl) {
     const secret = await readMasterSecret(opts.config);
     if (!secret) throw new Error('FORGE_MAIL_STORE_URL is set but the master secret (FORGE_SECRET or forge_certs/forge-secret) is not available');
     blobs = new RemoteBlobStore(opts.storeUrl, mailStoreToken(secret));

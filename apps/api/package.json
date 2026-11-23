@@ -27,6 +27,7 @@
     "@forge/storage": "workspace:*",
     "@forge/team": "workspace:*",
     "@socket.io/redis-adapter": "^8.3.0",
+    "@socket.io/redis-emitter": "^5.1.0",
     "drizzle-orm": "^0.45.4",
     "fast-xml-parser": "^5.12.1",
     "fastify": "^5.12.8",

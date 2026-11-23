@@ -1,6 +1,4 @@
 import { connect } from 'node:net';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { driveItems, driveVersions, orm } from '@forge/db';
 import type { DriveContext } from './context';
 
@@ -95,7 +93,6 @@ const IMAGE = /^image\/(png|jpeg|gif|webp|avif|tiff|bmp|heic|heif|svg\+xml)$/;
 const TEXT = /^(text\/|application\/(json|xml))/;
 const MAX_TEXT = 2 * 1024 * 1024;
 
-export const previewPath = (ctx: Pick<DriveContext, 'root'>, sha256: string) => join(ctx.root, '.previews', sha256.slice(0, 2), `${sha256}.webp`);
 
 export async function makeThumbnail(input: Buffer): Promise<Buffer> {
   const sharp = (await import('sharp')).default;
@@ -128,13 +125,7 @@ export async function processVersion(ctx: DriveContext, job: { itemId: string; v
   let text: string | null = null;
   try {
     if (mime && IMAGE.test(mime) && size < 200 * 1024 * 1024) {
-      const path = previewPath(ctx, sha);
-      const exists = await readFile(path).then(() => true).catch(() => false);
-      if (!exists) {
-        const webp = await makeThumbnail(await ctx.blobs.read(sha));
-        await mkdir(join(path, '..'), { recursive: true });
-        await writeFile(path, webp);
-      }
+      if (!(await ctx.previews.get(sha))) await ctx.previews.put(sha, await makeThumbnail(await ctx.blobs.read(sha)));
       thumbnail = true;
     }
   } catch (err) {
@@ -154,6 +145,6 @@ export async function processVersion(ctx: DriveContext, job: { itemId: string; v
 }
 
 /** Remove a preview when no version uses that content any more. */
-export async function dropPreview(ctx: Pick<DriveContext, 'root'>, sha256: string) {
-  await rm(previewPath(ctx, sha256), { force: true });
+export async function dropPreview(ctx: Pick<DriveContext, 'previews'>, sha256: string) {
+  await ctx.previews.delete(sha256);
 }

@@ -59,9 +59,15 @@ export interface AppConfig {
     /** Where the editor reaches the drive service's WOPI endpoints (FORGE_WOPI_URL; default the public URL). */
     wopiUrl: string;
   };
+  storage: {
+    /** Storage nodes (FORGE_STORE_NODES); empty = this machine's volumes. */
+    nodes: string[];
+    /** Copies of each file (FORGE_STORE_REPLICAS). */
+    replicas: number;
+  };
   team: {
     /** Meeting media (WebRTC) ports: FORGE_RTC_MIN_PORT–FORGE_RTC_MAX_PORT, UDP and TCP. */
-    rtc: { listenIp: string; announcedIp: string | null; minPort: number; maxPort: number; workers: number };
+    rtc: { listenIp: string; announcedIp: string | null; minPort: number; maxPort: number; workers: number; port: number | null };
     ffmpegPath: string;
   };
   mail: {
@@ -134,14 +140,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       officeProtocol: env.FORGE_OFFICE_PROTOCOL === 'wopi' || (!env.FORGE_OFFICE_PROTOCOL && !env.FORGE_OFFICE_URL && !!env.FORGE_COLLABORA_URL) ? 'wopi' : 'docs',
       officeJwtSecret: env.FORGE_OFFICE_JWT_SECRET || null,
     },
+    storage: {
+      nodes: (env.FORGE_STORE_NODES ?? '').split(/[\s,]+/).map((u) => u.trim()).filter(Boolean),
+      replicas: Number(env.FORGE_STORE_REPLICAS ?? 2),
+    },
     team: {
       rtc: {
         listenIp: env.FORGE_RTC_LISTEN_IP ?? '0.0.0.0',
         // Browsers send media here: this machine's LAN or public address (127.0.0.1 only works on this machine).
-        announcedIp: env.FORGE_RTC_ANNOUNCED_IP || null,
+        announcedIp: announcedAddress(env),
         minPort: Number(env.FORGE_RTC_MIN_PORT ?? 40000),
         maxPort: Number(env.FORGE_RTC_MAX_PORT ?? 40099),
         workers: Number(env.FORGE_RTC_WORKERS ?? 1),
+        // One port for every call (worker n: port + n) instead of the range.
+        port: env.FORGE_RTC_PORT ? Number(env.FORGE_RTC_PORT) : null,
       },
       ffmpegPath: env.FORGE_FFMPEG ?? 'ffmpeg',
     },
@@ -163,4 +175,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       disableAuthChecks: env.FORGE_MAIL_DISABLE_AUTH_CHECKS === 'true',
     },
   };
+}
+
+/**
+ * The address browsers send meeting media to: FORGE_RTC_ANNOUNCED_IP, or (one
+ * stack file for many machines, e.g. Docker Swarm) this machine's entry in
+ * FORGE_RTC_ANNOUNCED_MAP="host1=203.0.113.10,host2=203.0.113.11" looked up by
+ * FORGE_NODE_HOSTNAME (Swarm: "{{.Node.Hostname}}").
+ */
+export function announcedAddress(env: NodeJS.ProcessEnv): string | null {
+  if (env.FORGE_RTC_ANNOUNCED_IP) return env.FORGE_RTC_ANNOUNCED_IP;
+  const host = env.FORGE_NODE_HOSTNAME;
+  if (host && env.FORGE_RTC_ANNOUNCED_MAP) {
+    for (const pair of env.FORGE_RTC_ANNOUNCED_MAP.split(',')) {
+      const [name, ip] = pair.split('=').map((x) => x.trim());
+      if (name === host && ip) return ip;
+    }
+  }
+  return null;
 }

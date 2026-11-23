@@ -1,10 +1,9 @@
 import type { Server as HttpServer } from 'node:http';
-import { relative } from 'node:path';
 import { Server, type Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { channels, featureEnabled, meetings, orm, recordings, teamMessages, type Meeting } from '@forge/db';
+import { featureEnabled, meetings, orm, type Meeting } from '@forge/db';
 import { verifyToken } from '@forge/drive';
-import { Recorder, channelAudience, computePresence, postMessage, recordingPath, requireChannel, serialiseMessages, type Room } from '@forge/team';
+import { channelAudience, computePresence, requireChannel, type JoinResult } from '@forge/team';
 import type { AppContext } from '../context';
 import { meetingByCode, teamSettings } from '../routes/team';
 import { loadPrincipalData } from './auth';
@@ -103,12 +102,14 @@ export function attachTeamRealtime(server: HttpServer, ctx: AppContext, log: { w
   sweep.unref();
 
   // ---------------------------------------------------------------------------
-  // Meetings
+  // Meetings (each hosted by a media server; see @forge/team media-cluster)
   // ---------------------------------------------------------------------------
 
-  const wired = new Set<string>();
-  const recorders = new Map<string, { recorder: Recorder; by: string | null; meeting: Meeting }>();
+  /** Guests admitted while connected to this team service (other services check Redis). */
+  const admittedHere = new Map<string, string>();
+
   const callRoom = (id: string) => `call:${id}`;
+  const media = ctx.team.media;
 
   const lobbyList = async (meetingId: string) =>
     (await io.in(`lobby:${meetingId}`).fetchSockets()).map((s) => ({ id: s.id, name: s.data.name }));
@@ -126,72 +127,13 @@ export function attachTeamRealtime(server: HttpServer, ctx: AppContext, log: { w
     }
   };
 
-  /** Save a finished recording and post it where the meeting was held. */
-  const finishRecording = async (meetingId: string) => {
-    const r = recorders.get(meetingId);
-    if (!r) return;
-    recorders.delete(meetingId);
-    try {
-      const result = await r.recorder.stop();
-      const rel = relative(ctx.config.volumes.team.path, result.path);
-      const [rec] = await db.insert(recordings).values({ meetingId, path: rel, size: result.size, durationMs: result.durationMs, startedBy: r.by }).returning();
-      io.to(callRoom(meetingId)).emit('call:recording', { on: false, recordingId: rec!.id });
-      if (r.meeting.channelId) {
-        const [channel] = await db.select().from(channels).where(eq(channels.id, r.meeting.channelId)).limit(1);
-        if (channel) {
-          const msg = await postMessage({ db, drive: ctx.drive }, channel, null, { body: '', kind: 'recording', meta: { recordingId: rec!.id, meetingId, title: r.meeting.title, durationMs: result.durationMs, size: result.size } });
-          ctx.team.hub.toUsers(await channelAudience(db, channel), 'message:new', { message: msg, channel: { id: channel.id, kind: channel.kind, teamId: channel.teamId, name: channel.name } });
-        }
-      }
-    } catch (err) {
-      log.warn({ err, meetingId }, 'could not save a meeting recording');
-      io.to(callRoom(meetingId)).emit('call:recording', { on: false, error: 'The recording could not be saved' });
-    }
-  };
-
-  /** When the last person leaves: the meeting ends, its card says so, and the recording is saved. */
-  const meetingEnded = async (meetingId: string, participants: string[]) => {
-    wired.delete(meetingId);
-    await finishRecording(meetingId);
-    const [meeting] = await db.update(meetings).set({ endedAt: new Date() }).where(eq(meetings.id, meetingId)).returning();
-    if (meeting?.messageId) {
-      const [msg] = await db.select().from(teamMessages).where(eq(teamMessages.id, meeting.messageId)).limit(1);
-      if (msg) {
-        const durationMs = meeting.startedAt ? Date.now() - meeting.startedAt.getTime() : 0;
-        const [updated] = await db
-          .update(teamMessages)
-          .set({ meta: { ...(msg.meta ?? {}), endedAt: new Date().toISOString(), durationMs, participants } })
-          .where(eq(teamMessages.id, msg.id))
-          .returning();
-        const [channel] = await db.select().from(channels).where(eq(channels.id, msg.channelId)).limit(1);
-        if (channel) ctx.team.hub.toUsers(await channelAudience(db, channel), 'message:updated', { message: (await serialiseMessages(db, [updated!]))[0] });
-      }
-    }
-  };
-
-  const wire = (room: Room, meetingId: string) => {
-    if (wired.has(meetingId)) return;
-    wired.add(meetingId);
-    const names = new Set<string>();
-    const to = callRoom(meetingId);
-    room.on('peer-joined', (p) => {
-      names.add(p.name);
-      io.to(to).emit('call:peer-joined', p);
-    });
-    room.on('peer-left', (id) => io.to(to).emit('call:peer-left', { peerId: id }));
-    room.on('producer-added', (p) => io.to(to).emit('call:producer-added', p));
-    room.on('producer-closed', (p) => io.to(to).emit('call:producer-closed', p));
-    room.on('producer-paused', (p) => io.to(to).emit('call:producer-paused', p));
-    room.on('consumer-closed', ({ peerId, consumerId }) => io.to(peerId).emit('call:consumer-closed', { consumerId }));
-    room.once('closed', () => void meetingEnded(meetingId, [...names]).catch((err) => log.warn({ err }, 'could not end a meeting')));
-  };
-
   const leaveCall = async (socket: Socket<never, never, never, SocketData>) => {
     const meetingId = socket.data.meetingId;
     if (!meetingId) return;
     socket.data.meetingId = null;
     void socket.leave(callRoom(meetingId));
-    ctx.team.media.rooms.get(meetingId)?.leave(socket.id);
+    // The media server hosting the meeting forgets this connection (ends the meeting if it was the last).
+    await media.call(meetingId, 'leave', { peerId: socket.id }).catch(() => {});
     if (socket.data.userId) {
       // Still in a call in another tab?
       const others = (await io.in(`user:${socket.data.userId}`).fetchSockets()).some((s) => s.id !== socket.id && s.data.meetingId);
@@ -221,11 +163,12 @@ export function attachTeamRealtime(server: HttpServer, ctx: AppContext, log: { w
           else log.warn({ err, event }, 'team socket handler failed');
         }
       });
-    const room = () => {
-      const r = d.meetingId ? ctx.team.media.rooms.get(d.meetingId) : null;
-      if (!r) throw new Error('You are not in a meeting');
-      return r;
+    /** The meeting this connection is in (its signalling goes to that meeting's media server). */
+    const inMeeting = () => {
+      if (!d.meetingId) throw new Error('You are not in a meeting');
+      return d.meetingId;
     };
+    const call = <T = Record<string, unknown>>(method: string, args: Record<string, unknown> = {}) => media.call<T>(inMeeting(), method, { peerId: socket.id, ...args });
     const str = (v: unknown, what: string) => {
       if (typeof v !== 'string' || !v || v.length > 200) throw new Error(`Missing ${what}`);
       return v;
@@ -265,12 +208,12 @@ export function attachTeamRealtime(server: HttpServer, ctx: AppContext, log: { w
     on('call:prepare', async (p) => {
       const meeting = await prepare(str(p.code, 'meeting'));
       const settings = await teamSettings(ctx, meeting.orgId);
-      const r = ctx.team.media.rooms.get(meeting.id);
+      const info = await media.info(meeting.id);
       return {
         meeting: { id: meeting.id, title: meeting.title, code: meeting.code },
         you: { name: d.name, guest: !d.userId, host: await isHost(meeting, d.userId) },
         lobby: !d.userId && !d.admitted,
-        participants: r?.peerInfos().map((x) => ({ name: x.name, guest: x.guest })) ?? [],
+        participants: info?.peers.map((x) => ({ name: x.name, guest: x.guest })) ?? [],
         recordingAllowed: settings.recording,
       };
     });
@@ -282,129 +225,92 @@ export function attachTeamRealtime(server: HttpServer, ctx: AppContext, log: { w
       d.knocking = meeting.id;
       await socket.join(`lobby:${meeting.id}`);
       await announceLobby(meeting.id);
-      return { waiting: true, inMeeting: ctx.team.media.rooms.get(meeting.id)?.peers.size ?? 0 };
+      return { waiting: true, inMeeting: (await media.info(meeting.id))?.peers.length ?? 0 };
     });
 
     on('call:admit', async (p) => {
-      const r = room();
-      const me = r.peers.get(socket.id);
+      const meetingId = inMeeting();
+      const me = await call<{ guest: boolean } | null>('peer');
       if (!me || me.guest) throw new Error('Only people from the organisation can admit guests');
-      const target = (await io.in(`lobby:${r.id}`).fetchSockets()).find((s) => s.id === p.guestId);
+      const target = (await io.in(`lobby:${meetingId}`).fetchSockets()).find((s) => s.id === p.guestId);
       if (!target) throw new Error('They’re no longer waiting');
-      target.leave(`lobby:${r.id}`);
+      target.leave(`lobby:${meetingId}`);
       if (p.admit === false) {
         target.emit('call:denied', {});
       } else {
-        target.data.admitted = true;
-        target.emit('call:admitted', {});
+        // The guest's connection may be on another team service: it learns it was admitted from this event.
+        target.emit('call:admitted', { meetingId });
+        await ctx.redis?.set(`forge:team:admitted:${target.id}`, meetingId, 'EX', 3600);
+        admittedHere.set(target.id, meetingId);
       }
-      await announceLobby(r.id);
+      await announceLobby(meetingId);
     });
 
     on('call:join', async (p) => {
       if (d.meetingId) throw new Error('You are already in a meeting');
       const meeting = await prepare(str(p.code, 'meeting'));
-      if (!d.userId && !d.admitted) throw new Error('Wait to be admitted');
+      if (!d.userId && !d.admitted) {
+        const ok = admittedHere.get(socket.id) === meeting.id || (await ctx.redis?.get(`forge:team:admitted:${socket.id}`)) === meeting.id;
+        if (!ok) throw new Error('Wait to be admitted');
+        d.admitted = true;
+      }
       const settings = await teamSettings(ctx, meeting.orgId);
-      const r = await ctx.team.media.room(meeting.id);
-      if (r.peers.size >= settings.maxParticipants) throw new Error(`This meeting is full (${settings.maxParticipants} people)`);
-      wire(r, meeting.id);
       if (!meeting.startedAt || meeting.endedAt) await db.update(meetings).set({ startedAt: meeting.endedAt || !meeting.startedAt ? new Date() : meeting.startedAt, endedAt: null }).where(eq(meetings.id, meeting.id));
       // Calendar meetings: the first person from the organisation to open it hosts it.
       if (!meeting.createdBy && d.userId) await db.update(meetings).set({ createdBy: d.userId }).where(and(eq(meetings.id, meeting.id)));
       const host = await isHost({ ...meeting, createdBy: meeting.createdBy ?? d.userId }, d.userId);
-      const peers = r.peerInfos();
-      const you = r.join({ id: socket.id, userId: d.userId, name: d.name, guest: !d.userId, host });
+      // Join the meeting's room first, so this connection hears everything from now on.
+      await socket.join(callRoom(meeting.id));
+      let joined: JoinResult;
+      try {
+        joined = await media.call<JoinResult>(meeting.id, 'join', { peer: { id: socket.id, userId: d.userId, name: d.name, guest: !d.userId, host }, max: settings.maxParticipants });
+      } catch (err) {
+        void socket.leave(callRoom(meeting.id));
+        throw err;
+      }
       d.meetingId = meeting.id;
       d.knocking = null;
       void socket.leave(`lobby:${meeting.id}`);
-      await socket.join(callRoom(meeting.id));
       if (d.userId) {
         await ctx.team.presence.setInCall(d.userId, true);
         await publishPresence(d.userId, d.orgId);
       }
       return {
-        you,
-        peers,
-        producers: r.producers(),
-        rtpCapabilities: r.rtpCapabilities,
-        recording: recorders.has(meeting.id),
+        ...joined,
         recordingAllowed: settings.recording && host,
         lobby: host || d.userId ? await lobbyList(meeting.id) : [],
         meeting: { id: meeting.id, title: meeting.title, code: meeting.code, channelId: meeting.channelId },
       };
     });
 
-    on('call:transport', async () => ({ transport: await room().createTransport(socket.id) }));
-    on('call:connect', async (p) => {
-      await room().connectTransport(socket.id, str(p.transportId, 'connection'), p.dtlsParameters as never);
-    });
+    on('call:transport', async () => call('transport'));
+    on('call:connect', async (p) => call('connect', { transportId: str(p.transportId, 'connection'), dtlsParameters: p.dtlsParameters }));
     on('call:produce', async (p) => {
       const source = p.source === 'screen' || p.source === 'cam' ? p.source : 'mic';
-      const id = await room().produce(socket.id, str(p.transportId, 'connection'), p.kind === 'video' ? 'video' : 'audio', p.rtpParameters as never, source);
-      return { id };
+      return call('produce', { transportId: str(p.transportId, 'connection'), kind: p.kind === 'video' ? 'video' : 'audio', rtpParameters: p.rtpParameters, source });
     });
-    on('call:consume', async (p) => ({ consumer: await room().consume(socket.id, str(p.transportId, 'connection'), str(p.producerId, 'stream'), p.rtpCapabilities as never) }));
-    on('call:resume', async (p) => {
-      await room().resumeConsumer(socket.id, str(p.consumerId, 'stream'));
-    });
-    on('call:pause', async (p) => {
-      await room().setProducerPaused(socket.id, str(p.producerId, 'stream'), p.paused === true);
-    });
-    on('call:close-producer', async (p) => {
-      room().closeProducer(socket.id, str(p.producerId, 'stream'));
-    });
-    on('call:hand', async (p) => {
-      const r = room();
-      r.setHand(socket.id, p.raised === true);
-      io.to(callRoom(r.id)).emit('call:hand', { peerId: socket.id, raised: p.raised === true });
-    });
+    on('call:consume', async (p) => call('consume', { transportId: str(p.transportId, 'connection'), producerId: str(p.producerId, 'stream'), rtpCapabilities: p.rtpCapabilities }));
+    on('call:resume', async (p) => call('resume', { consumerId: str(p.consumerId, 'stream') }));
+    on('call:pause', async (p) => call('pause', { producerId: str(p.producerId, 'stream'), paused: p.paused === true }));
+    on('call:close-producer', async (p) => call('closeProducer', { producerId: str(p.producerId, 'stream') }));
+    on('call:hand', async (p) => call('hand', { raised: p.raised === true }));
     on('call:reaction', async (p) => {
       const emoji = typeof p.emoji === 'string' && p.emoji.length <= 8 ? p.emoji : null;
-      if (emoji) io.to(callRoom(room().id)).emit('call:reaction', { peerId: socket.id, emoji });
+      if (emoji) await call('reaction', { emoji });
     });
-
-    const requireHost = () => {
-      const r = room();
-      if (!r.peers.get(socket.id)?.host) throw new Error('Only the meeting’s organisers can do this');
-      return r;
-    };
-    on('call:mute', async (p) => {
-      const r = requireHost();
-      const target = str(p.peerId, 'person');
-      await r.muteAudio(target);
-      io.to(target).emit('call:muted', { by: d.name });
-    });
+    on('call:mute', async (p) => call('mute', { target: str(p.peerId, 'person'), byName: d.name }));
     on('call:remove', async (p) => {
-      const r = requireHost();
       const target = str(p.peerId, 'person');
-      if (target === socket.id) throw new Error('Leave the meeting instead');
-      const s = (await io.in(callRoom(r.id)).fetchSockets()).find((x) => x.id === target);
-      s?.emit('call:removed', { by: d.name });
-      const local = io.sockets.sockets.get(target) as unknown as Socket<never, never, never, SocketData> | undefined;
-      if (local) await leaveCall(local);
-      else r.leave(target);
+      await call('remove', { target, byName: d.name });
+      // Their connection (here or on another team service) leaves the meeting's room.
+      io.in(target).socketsLeave(callRoom(inMeeting()));
     });
     on('call:record', async (p) => {
-      const r = requireHost();
-      const [meeting] = await db.select().from(meetings).where(eq(meetings.id, r.id)).limit(1);
+      const meetingId = inMeeting();
+      const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId)).limit(1);
       if (!meeting) throw new Error('Meeting not found');
-      if (p.on === true) {
-        if (!(await teamSettings(ctx, meeting.orgId)).recording) throw new Error('Recording is turned off for your organisation');
-        if (recorders.has(r.id)) return { recording: true };
-        const recorder = new Recorder(r, recordingPath(ctx.config.volumes.team.path, r.id), { ffmpegPath: ctx.config.team.ffmpegPath, log });
-        recorders.set(r.id, { recorder, by: d.userId, meeting });
-        try {
-          await recorder.start();
-        } catch (err) {
-          recorders.delete(r.id);
-          throw new Error(`Recording could not start: ${(err as Error).message}`);
-        }
-        io.to(callRoom(r.id)).emit('call:recording', { on: true, by: d.name });
-        return { recording: true };
-      }
-      await finishRecording(r.id);
-      return { recording: false };
+      if (p.on === true && !(await teamSettings(ctx, meeting.orgId)).recording) throw new Error('Recording is turned off for your organisation');
+      return call('record', { on: p.on === true, byName: d.name, userId: d.userId });
     });
 
     on('call:leave', async () => {
@@ -414,6 +320,7 @@ export function attachTeamRealtime(server: HttpServer, ctx: AppContext, log: { w
     socket.on('disconnect', () => {
       void leaveCall(socket).catch(() => {});
       if (d.knocking) void announceLobby(d.knocking).catch(() => {});
+      admittedHere.delete(socket.id);
       if (d.userId) setTimeout(() => void publishPresence(d.userId!, d.orgId).catch(() => {}), 1000);
     });
   });
@@ -423,7 +330,6 @@ export function attachTeamRealtime(server: HttpServer, ctx: AppContext, log: { w
     async close() {
       clearInterval(sweep);
       clearInterval(callBeat);
-      for (const id of [...recorders.keys()]) await finishRecording(id).catch(() => {});
       await io.close();
       cleanups.forEach((c) => c());
     },

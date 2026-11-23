@@ -29,7 +29,9 @@ export function adminTeamRoutes(app: App, ctx: AppContext) {
     return {
       settings: await teamSettings(ctx, req.principal!.orgId),
       status: {
-        media: { announcedIp: rtc.announcedIp, ports: `${rtc.minPort}–${rtc.maxPort}`, workers: rtc.workers, liveMeetings: ctx.team.media.rooms.size },
+        media: { announcedIp: rtc.announcedIp, ports: rtc.port ? `${rtc.port}` : `${rtc.minPort}–${rtc.maxPort}`, workers: rtc.workers, liveMeetings: (await ctx.team.media.live()).length },
+        // Media servers running now (each hosts whole meetings).
+        nodes: (await ctx.team.media.directory.nodes()).map((n) => ({ id: n.id, address: n.address, meetings: n.meetings.length, people: n.peers })),
         recording: ffmpegStatus(ctx.config.team.ffmpegPath),
       },
     };
@@ -112,12 +114,13 @@ export function adminTeamRoutes(app: App, ctx: AppContext) {
   });
 
   app.get('/api/v1/admin/team/meetings', { preHandler: requirePermission(ctx, 'org:read'), schema: { tags: ['admin: team'], summary: 'Meetings happening now' } }, async (req) => {
-    const ids = [...ctx.team.media.rooms.keys()];
+    const live = await ctx.team.media.live();
+    const ids = live.map((m) => m.id);
     const rows = ids.length ? await db.select().from(meetings).where(and(inArray(meetings.id, ids), eq(meetings.orgId, req.principal!.orgId))) : [];
     return {
       items: rows.map((m) => {
-        const room = ctx.team.media.rooms.get(m.id);
-        return { id: m.id, title: m.title, startedAt: m.startedAt, participants: room?.peerInfos().length ?? 0, guests: room?.peerInfos().filter((p) => p.guest).length ?? 0 };
+        const l = live.find((x) => x.id === m.id)!;
+        return { id: m.id, title: m.title, startedAt: m.startedAt, participants: l.peers, guests: l.guests, server: l.node };
       }),
     };
   });

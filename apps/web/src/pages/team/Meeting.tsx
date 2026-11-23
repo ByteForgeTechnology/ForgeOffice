@@ -238,6 +238,7 @@ function MeetingRoom({ code, guestPass }: { code: string; guestPass: string | nu
         toast.success(`${by} muted you`);
       }),
       on<{ by: string }>('call:removed', ({ by }) => {
+        socket.emit('call:leave', {});
         cleanup();
         setError(`${by} removed you from the meeting`);
         setStage('left');

@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { deriveKey, randomToken } from '@forge/auth';
 import { smarthostKey } from '@forge/mail';
+import { syncSharedFiles, type Database } from '@forge/db';
 
 async function readOrCreate(path: string, create: () => string): Promise<string> {
   try {
@@ -63,4 +64,24 @@ export async function resolveSetupToken(certsDir: string, fromEnv: string | null
 
 export async function discardSetupToken(certsDir: string): Promise<void> {
   await rm(join(certsDir, SETUP_TOKEN_FILE), { force: true });
+}
+
+/**
+ * Bring this machine's keys and certificates in line with the rest of the
+ * installation (see syncSharedFiles). On a machine that starts before the
+ * directory service has created the database tables, wait for them.
+ */
+export async function shareKeys(db: Database, secret: string, certsDir: string, log: { info: (o: unknown, m?: string) => void }) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const written = await syncSharedFiles(db, secret, certsDir);
+      if (written.length) log.info({ files: written }, 'copied shared keys and certificates to this machine');
+      return;
+    } catch (err) {
+      const missing = (err as { code?: string }).code === '42P01' || /shared_files.*does not exist|relation .* does not exist/i.test((err as Error).message);
+      if (!missing || attempt > 90) throw err;
+      if (attempt === 0) log.info({}, 'waiting for the directory service to create the database tables');
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
 }

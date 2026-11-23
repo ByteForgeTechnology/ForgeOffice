@@ -1,7 +1,6 @@
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 import { blobs, orm, type Database } from '@forge/db';
-import type { BlobStore } from '@forge/storage';
+import { LocalKeyedStore, LocalUploadStore, type BlobStore, type KeyedStore, type ObjectStore, type UploadStore } from '@forge/storage';
+import { join } from 'node:path';
 
 const { eq, sql } = orm;
 
@@ -19,10 +18,12 @@ export interface LockStore {
 
 export interface DriveContext {
   db: Database;
-  /** Content-addressed blobs on forge_drive_data (shared with organisation assets). */
-  blobs: BlobStore;
-  /** Root of forge_drive_data: uploads in progress (.uploads) and previews (.previews) live here. */
-  root: string;
+  /** Content-addressed file content (shared with organisation pictures): local, or the storage cluster. */
+  blobs: ObjectStore;
+  /** Thumbnails, keyed by the content's SHA-256. */
+  previews: KeyedStore;
+  /** Uploads in progress (resumable). */
+  uploads: UploadStore;
   log: DriveLogger;
   /** Redis for locks; without it an in-process lock is used (single process). */
   redis?: LockStore | null;
@@ -41,7 +42,7 @@ export async function retain(ctx: Pick<DriveContext, 'db'>, sha256: string, size
 }
 
 /** Drop a reference; the bytes are deleted when nothing uses them any more. */
-export async function release(ctx: Pick<DriveContext, 'db' | 'blobs'> & Partial<Pick<DriveContext, 'root'>>, sha256: string) {
+export async function release(ctx: Pick<DriveContext, 'db' | 'blobs'> & Partial<Pick<DriveContext, 'previews'>>, sha256: string) {
   const [row] = await ctx.db
     .update(blobs)
     .set({ refCount: sql`greatest(${blobs.refCount} - 1, 0)` })
@@ -50,7 +51,7 @@ export async function release(ctx: Pick<DriveContext, 'db' | 'blobs'> & Partial<
   if (row && row.refCount === 0) {
     await ctx.db.delete(blobs).where(eq(blobs.sha256, sha256));
     await ctx.blobs.delete(sha256);
-    if (ctx.root) await rm(join(ctx.root, '.previews', sha256.slice(0, 2), `${sha256}.webp`), { force: true });
+    await ctx.previews?.delete(sha256).catch(() => {});
   }
 }
 
@@ -96,4 +97,9 @@ export async function withLock<T>(ctx: Pick<DriveContext, 'redis'>, key: string,
     done();
     if (local.get(name) === mine) local.delete(name);
   }
+}
+
+/** Previews and uploads on forge_drive_data (one machine): the layout ForgeDrive has always used. */
+export function localDriveStores(root: string, blobs: BlobStore) {
+  return { previews: new LocalKeyedStore(join(root, '.previews'), '.webp'), uploads: new LocalUploadStore(join(root, '.uploads'), blobs) };
 }

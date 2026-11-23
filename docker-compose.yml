@@ -22,10 +22,15 @@ name: forgeoffice
 #   calendar-api   8093    calendars, CalDAV
 #   contacts-api   8094    contacts, CardDAV
 #   tasks-api      8095    tasks
-#   mail-store     8096    mailbox storage (the only container mounting forge_mail_data)
+#   store          8096    storage node: mail, Drive files and recordings (the only container
+#                          writing forge_mail_data / forge_drive_data / forge_team_media)
 #   drive-api      8097    ForgeDrive and ForgeSites: files, versions, sharing, WOPI
-#   team-api       8098    ForgeTeam: messages, presence, meeting signalling and the SFU
+#   team-api       8098    ForgeTeam: messages, presence, meeting signalling
+#   media          8099    meeting server (SFU, recording)
 #                  40000–40099 UDP/TCP: meeting audio and video (browsers connect here)
+#
+# More machines, or several copies of a service: see docker-stack.yml (Docker
+# Swarm) and deploy/multi-host/ (plain Docker on each machine).
 #   smtp           25 / 587 / 465   receive mail, submission
 #   imap           143 / 993        mail apps
 #   worker         –       delivery queue, virus scans, previews, backups, maintenance
@@ -52,7 +57,8 @@ x-backend: &backend
     FORGE_WOPI_URL: ${FORGE_WOPI_URL:-http://drive-api:8097}
     # drive-api talks to the Office editor inside the Docker network; browsers use FORGE_OFFICE_URL.
     FORGE_OFFICE_INTERNAL_URL: ${FORGE_OFFICE_INTERNAL_URL:-http://office}
-    FORGE_MAIL_STORE_URL: http://mail-store:8096
+    # Storage nodes (more can join: they announce themselves in Redis).
+    FORGE_STORE_NODES: ${FORGE_STORE_NODES:-http://store:8096}
     FORGE_MAIL_EMBED: "false"
   depends_on: &after-directory
     directory:
@@ -141,7 +147,6 @@ services:
         condition: service_healthy
     volumes:
       - forge_certs:/data/certs        # creates the master secret, signing keys and setup token
-      - forge_drive_data:/data/drive   # organisation logo
       - forge_backups:/data/backups    # backups listed and started from the admin center
       # Optional, for live container status in the admin console. Also set
       # FORGE_DOCKER_SOCKET=/var/run/docker.sock. Prefer a read-only socket proxy.
@@ -153,11 +158,10 @@ services:
     ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8092:8092"]
     depends_on:
       <<: *after-directory
-      mail-store:
+      store:
         condition: service_healthy
     volumes:
       - forge_certs:/data/certs        # DKIM keys for new domains
-      - forge_drive_data:/data/drive   # signature images
 
   calendar-api:
     <<: *api
@@ -186,41 +190,62 @@ services:
     ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8097:8097"]
     volumes:
       - forge_certs:/data/certs:ro     # share-link and WOPI token keys
-      - forge_drive_data:/data/drive   # files (content-addressed), previews, partial uploads
 
   team-api:
     <<: *api
+    environment: { <<: *backend-env, FORGE_SERVICES: team, PORT: 8098 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8098:8098"]
+    volumes:
+      - forge_certs:/data/certs:ro         # guest passes and recording links are signed
+      - forge_team_media:/data/team:ro     # recordings made before the store held them
+
+  # Meeting server (SFU): each meeting runs on one media server; add more on
+  # other machines for more meetings. Browsers send audio and video straight
+  # to these ports, so they are published on every interface.
+  # FORGE_RTC_ANNOUNCED_IP must be this machine's address as other computers
+  # see it (LAN or public IP).
+  media:
+    <<: *api
     environment:
       <<: *backend-env
-      FORGE_SERVICES: team
-      PORT: 8098
-      # Meeting media: browsers send audio and video straight to these ports,
-      # so they are published on every interface. FORGE_RTC_ANNOUNCED_IP must be
-      # this machine's address as other computers see it (LAN or public IP).
+      FORGE_SERVICES: media
+      PORT: 8099
       FORGE_RTC_ANNOUNCED_IP: ${FORGE_RTC_ANNOUNCED_IP:-}
       FORGE_RTC_MIN_PORT: 40000
       FORGE_RTC_MAX_PORT: 40099
     ports:
-      - "${FORGE_SERVICE_BIND:-127.0.0.1}:8098:8098"
+      - "${FORGE_SERVICE_BIND:-127.0.0.1}:8099:8099"
       - "40000-40099:40000-40099/udp"
       - "40000-40099:40000-40099/tcp"
     volumes:
-      - forge_certs:/data/certs:ro     # guest passes and recording links are signed
-      - forge_team_media:/data/team    # meeting recordings
-      - forge_drive_data:/data/drive   # team libraries (deleting a team removes its files)
+      - forge_certs:/data/certs:ro
 
   # ------------------------------------------------------------------ mail --
   # Mailbox storage: raw messages live only here. SMTP, IMAP, the webmail back
   # end and the worker read and write them over HTTP with a service token.
-  mail-store:
+  # Storage node: raw messages, Drive files (and previews, uploads in progress)
+  # and meeting recordings. Other services read and write through it with a
+  # service token. Add more nodes (here or on other machines) for space and
+  # redundancy: every file is kept on FORGE_STORE_REPLICAS of them (default 2).
+  store:
     <<: *image
     command: ["node", "apps/mailstore/dist/main.js"]
     env_file: .env # FORGE_SECRET, if set there: the service token is derived from it
-    environment: { FORGE_DATA_ROOT: /data, PORT: 8096, HEALTH_PATH: /healthz }
+    environment:
+      FORGE_DATA_ROOT: /data
+      PORT: 8096
+      HEALTH_PATH: /healthz
+      REDIS_URL: redis://redis:6379
+      FORGE_STORE_URL: http://store:8096
     ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8096:8096"]
     depends_on: *after-directory
+    networks:
+      default:
+        aliases: [mail-store] # older settings (FORGE_MAIL_STORE_URL=http://mail-store:8096)
     volumes:
       - forge_mail_data:/data/mail
+      - forge_drive_data:/data/drive
+      - forge_team_media:/data/team
       - forge_certs:/data/certs:ro
 
   smtp:
@@ -241,7 +266,7 @@ services:
       disable: true
     depends_on:
       <<: *after-directory
-      mail-store:
+      store:
         condition: service_healthy
     volumes:
       - forge_certs:/data/certs        # TLS certificate (a self-signed one is created if missing)
@@ -264,7 +289,7 @@ services:
       disable: true
     depends_on:
       <<: *after-directory
-      mail-store:
+      store:
         condition: service_healthy
       smtp:
         condition: service_started # smtp creates the TLS certificate first if there is none
@@ -279,7 +304,7 @@ services:
       disable: true
     depends_on:
       <<: *after-directory
-      mail-store:
+      store:
         condition: service_healthy
     volumes:
       - forge_mail_data:/data/mail:ro  # read-only: backups and usage scans (messages go through mail-store)
@@ -366,7 +391,7 @@ services:
 volumes:
   forge_db_data:      # PostgreSQL database files
   forge_redis_data:   # Redis AOF/RDB persistence & BullMQ job states
-  forge_mail_data:    # Mailbox storage: raw messages (.eml) & attachments — mounted by mail-store
+  forge_mail_data:    # Mailbox storage: raw messages (.eml) & attachments — written by the store
   forge_drive_data:   # ForgeDrive files (by SHA-256), previews, organisation logo & signature images
   forge_team_media:   # Chat file drops, voice notes & meeting recordings
   forge_certs:        # TLS certificates, DKIM keys, OIDC signing keys & master secret

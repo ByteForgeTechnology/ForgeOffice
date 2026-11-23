@@ -7,10 +7,12 @@ import { VOLUME_SCAN_KEY, type JobData, type JobName, type VolumeScan } from '@f
 import { directorySize } from '@forge/storage';
 import type { WorkerConfig } from '../config';
 import { pruneBackups } from './backup';
+import { repairStorage } from './storage';
+import type { StorageSetup } from '@forge/storage';
 
 const { and, eq, lt } = orm;
 
-export function createMaintenanceProcessor(db: Database, redis: Redis, config: WorkerConfig, mail: MailContext, drive: DriveContext) {
+export function createMaintenanceProcessor(db: Database, redis: Redis, config: WorkerConfig, mail: MailContext, drive: DriveContext, storage?: StorageSetup) {
   return async (job: Job<JobData<'maintenance'>, unknown, JobName<'maintenance'>>) => {
     switch (job.name) {
       case 'purge-deleted-users': {
@@ -61,6 +63,9 @@ export function createMaintenanceProcessor(db: Database, redis: Redis, config: W
         for (const org of await db.select({ id: organizations.id, s: organizations.driveSettings }).from(organizations)) purged += await purgeExpired(drive, org.s?.trashDays ?? 93, org.id);
         return { purged };
       }
+      case 'storage-repair':
+        // Copies on enough storage nodes; adopting older data; emptying retiring nodes.
+        return storage ? repairStorage(db, redis, storage, { info: (o, m) => void job.log(`${m ?? ''} ${JSON.stringify(o)}`), warn: (o, m) => void job.log(`${m ?? ''} ${JSON.stringify(o)}`) }) : { skipped: true };
       case 'star-notifications':
         // Changes to starred documents and list items, batched per person.
         return runStarNotifications(db, { publicUrl: config.publicUrl, send: (email) => sendSystemNotice(mail, email).then(() => undefined), log: job.log ? { warn: (o, m) => void job.log(`${m ?? ''} ${JSON.stringify(o)}`) } : undefined });

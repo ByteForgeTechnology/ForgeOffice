@@ -49,8 +49,9 @@ ForgeOffice runs as one container per component, all from one image. Browsers, p
 | `calendar-api` | 8093 | Calendars, scheduling, CalDAV |
 | `contacts-api` | 8094 | Contacts, CardDAV |
 | `tasks-api` | 8095 | Tasks |
-| `mail-store` | 8096 | Mailbox storage: the only container that mounts `forge_mail_data` |
-| `team-api` | 8098, 40000–40099 UDP/TCP | ForgeTeam back end: messages, presence, meeting signalling (Socket.IO at `/team-socket`) and the mediasoup SFU, which browsers connect to directly on the media ports |
+| `store` | 8096 | Storage node: mail, Drive files (with previews and uploads in progress) and meeting recordings. The only container that writes `forge_mail_data`, `forge_drive_data` and `forge_team_media` |
+| `team-api` | 8098 | ForgeTeam back end: messages, presence and meeting signalling (Socket.IO at `/team-socket`) |
+| `media` | 8099, 40000–40099 UDP/TCP | Meeting server (mediasoup SFU, recording). Browsers connect to it directly on the media ports |
 | `drive-api` | 8097 | ForgeDrive and ForgeSites back end: files, versions, permissions, links, search, WOPI for Office editing |
 | `smtp` | 25, 587, 465 | Receiving mail and submission from mail apps |
 | `imap` | 143, 993 | Mail apps (IMAP) |
@@ -70,6 +71,34 @@ Open `FORGE_PUBLIC_URL`, enter the setup token, and complete the wizard (organis
 **Meetings.** Browsers send audio and video straight to `team-api` on ports 40000–40099 (UDP, with TCP as a fallback), which are published on every interface. Set `FORGE_RTC_ANNOUNCED_IP` in `.env` to the server's address as other computers reach it: its LAN IP on an office network, or its public IP with those ports forwarded. Without it, only browsers on the server itself can join. Admin → ForgeTeam → Meetings & policies shows the setting.
 
 For HTTPS with automatic Let's Encrypt certificates, set `FORGE_DOMAIN` and `FORGE_PUBLIC_URL=https://<domain>` and run `docker compose --profile tls up -d`. Caddy terminates TLS in front of the gateway.
+
+## Several machines
+
+ForgeOffice can spread over several machines, and run several copies of any service for load balancing:
+
+- **Stateless services** run any number of copies behind the gateway: `directory`, `mail-api`, `calendar-api`, `contacts-api`, `tasks-api`, `drive-api`, `team-api`, the web apps, `smtp`/`imap` and `worker`. They share Postgres and Redis. Real-time events fan out through Redis, and files are on the storage nodes. Migrations take a database lock, so several `directory` copies can start together.
+- **Storage nodes** (`store`) keep mail, Drive files, previews and recordings on their own disks. Run one on every machine that should hold data. Each file is kept on `FORGE_STORE_REPLICAS` nodes (default 2), and reads fall back to another copy if a node is down.
+  - Nodes announce themselves in Redis, so a new node is used straight away.
+  - Every 10 minutes the worker's `storage-repair` job checks copies:
+    - it records files a node already holds (for example data from before the cluster);
+    - it makes missing copies (after adding a node, or after losing one);
+    - it empties nodes you retire.
+  - Admin → Organisation → **Servers & storage** shows each node's space and files. It's also where you retire a node, or forget one that's gone for good.
+  - Backups ask each node for an archive of its share.
+- **Media servers** (`media`) each host whole meetings. A new meeting goes to the least busy live server. `team-api` passes each meeting's signalling to its server through Redis, and browsers send audio and video straight to the server's address.
+  - `FORGE_RTC_PORT=40000` runs every call on one UDP and TCP port, which is easier to open in a firewall.
+  - `FORGE_RTC_ANNOUNCED_IP`, or `FORGE_RTC_ANNOUNCED_MAP` with `FORGE_NODE_HOSTNAME`, says where browsers reach each server.
+- **Keys and certificates** are kept in the database, encrypted with the master secret. That covers the sign-in signing keys, DKIM keys, the SMTP/IMAP TLS certificate and the setup token. Every machine copies them into its own `forge_certs`, so the volume needn't be shared. **Every machine must have the same `FORGE_SECRET`**; a machine with a different one refuses to start and says so.
+- **The gateway** sends each service's requests to `{$FORGE_UPSTREAM_<SERVICE>:<container>}`. List several addresses (`FORGE_UPSTREAM_MAIL_API="10.0.0.21:8092 10.0.0.22:8092"`) and it balances between them (least busy first, health-checked at `/healthz`).
+- **Postgres and Redis** run once. Use your own replicated Postgres and Redis (and point `DATABASE_URL` and `REDIS_URL` at them) if you need those to survive a machine failing.
+
+Two ways to deploy:
+
+**Docker Swarm** (`docker-stack.yml`, the same machines managed as one): label the machines (`forge.db`, `forge.store`, `forge.media`, `forge.mail`), push the image to a registry, then `set -a; . ./.env; set +a; docker stack deploy -c docker-stack.yml forge`. Each service has a `replicas` setting (`FORGE_MAIL_API_REPLICAS`, …), or use `docker service scale forge_mail-api=3`. Storage nodes, media servers and SMTP/IMAP run one per labelled machine.
+
+**Plain Docker** (`deploy/multi-host/`): every machine runs the same compose file with its own `.env`, see `env.example`. `COMPOSE_PROFILES` chooses what each machine runs: `data`, `gateway`, `web`, `directory`, `apps`, `mail`, `store`, `media` or `worker`. For more copies, run a role on more machines and list them in the gateway machine's `FORGE_UPSTREAM_*`.
+
+A single machine needs none of this: `docker compose up -d` runs one of everything, with one storage node and one media server.
 
 ## Development
 
@@ -116,7 +145,7 @@ apps/
   api/        Fastify back-end services (FORGE_SERVICES=directory|mail|calendar|contacts|tasks|drive|all), oidc-provider, Socket.IO, CalDAV/CardDAV; gateway generator
   worker/     BullMQ worker: outbound mail delivery, virus scans, thumbnails, backups, scheduled maintenance
   mailserver/ SMTP (25/587/465) and IMAP (143/993) listeners (FORGE_MAIL_ROLE=smtp|imap)
-  mailstore/  Mailbox storage service (content-addressed raw messages over authenticated HTTP)
+  mailstore/  Storage node ("store"): mail, Drive and recordings over authenticated HTTP; any number of nodes
   web/      React + Vite + Tailwind web apps (portal, mail, calendar, contacts, tasks, drive, sites, admin), built one bundle per app; serve.mjs serves one app per container
 packages/
   db/       Drizzle schema, migrations, Postgres/PGlite connection

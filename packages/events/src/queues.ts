@@ -20,6 +20,7 @@ export interface QueueJobs {
     'purge-drive-trash': Record<string, never>;
     'cleanup-drive-uploads': Record<string, never>;
     'star-notifications': Record<string, never>;
+    'storage-repair': Record<string, never>;
   };
   'mail-delivery': {
     deliver: { outboundId: string };
@@ -58,6 +59,7 @@ export const SCHEDULE_LABELS: Record<string, string> = {
   'purge-drive-trash': 'Empty recycle bins (retention)',
   'cleanup-drive-uploads': 'Clear abandoned uploads',
   'star-notifications': 'Email changes to starred items',
+  'storage-repair': 'Check copies on storage nodes',
   'prune-backups': 'Delete old backups',
 };
 

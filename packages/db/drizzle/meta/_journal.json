@@ -148,6 +148,13 @@
       "when": 1795431998467,
       "tag": "0020_user_avatar",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795434919003,
+      "tag": "0021_cluster",
+      "breakpoints": true
     }
   ]
 }

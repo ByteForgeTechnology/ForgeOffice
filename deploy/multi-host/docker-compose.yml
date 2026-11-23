@@ -1,0 +1,169 @@
+# ForgeOffice on several machines with plain Docker (no Swarm).
+#
+# Every machine gets this folder, the image, and its own .env (copy
+# env.example). Each machine runs the roles it should host:
+#
+#   COMPOSE_PROFILES=data                      Postgres + Redis (exactly one machine)
+#   COMPOSE_PROFILES=gateway,web,directory      the front door, web apps, sign-in
+#   COMPOSE_PROFILES=apps                       mail-api, calendar, contacts, tasks, drive, team
+#   COMPOSE_PROFILES=mail                       SMTP + IMAP
+#   COMPOSE_PROFILES=store                      a storage node (as many machines as you like)
+#   COMPOSE_PROFILES=media                      a meeting server (as many as you like)
+#   COMPOSE_PROFILES=worker                     background jobs (one or more)
+#
+#   docker compose -f deploy/multi-host/docker-compose.yml up -d
+#
+# More copies of a service = run its role on more machines and list them in
+# the gateway machine's FORGE_UPSTREAM_<SERVICE> (e.g. FORGE_UPSTREAM_MAIL_API=
+# "10.0.0.21:8092 10.0.0.22:8092"). Machines talk over their private network:
+# ports are published on FORGE_BIND (this machine's private address); keep
+# them behind a firewall. Every machine must have the same FORGE_SECRET.
+
+name: ${COMPOSE_PROJECT_NAME:-forgeoffice}
+
+x-image: &image
+  image: ${FORGE_IMAGE:-forgeoffice/app:latest}
+  restart: unless-stopped
+  env_file: .env
+
+x-env: &env
+  DATABASE_URL: postgres://${POSTGRES_USER:-forge}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@${FORGE_DB_HOST:?set FORGE_DB_HOST to the data machine}:5432/${POSTGRES_DB:-forge}
+  REDIS_URL: redis://${FORGE_REDIS_HOST:-${FORGE_DB_HOST}}:6379
+  FORGE_DATA_ROOT: /data
+  FORGE_SECRET: ${FORGE_SECRET:?set FORGE_SECRET (the same on every machine)}
+  # Storage nodes: a starting list (others announce themselves in Redis).
+  FORGE_STORE_NODES: ${FORGE_STORE_NODES:?list the storage nodes, e.g. http://10.0.0.31:8096}
+  FORGE_STORE_REPLICAS: ${FORGE_STORE_REPLICAS:-2}
+  FORGE_MAIL_EMBED: "false"
+  FORGE_WOPI_URL: ${FORGE_WOPI_URL:-http://${FORGE_BIND}:8097}
+
+x-api: &api
+  <<: *image
+  command: ["node", "apps/api/dist/main.js"]
+  volumes: [forge_certs:/data/certs] # filled from the database: keys are shared, not copied by hand
+
+x-web: &web
+  <<: *image
+  command: ["node", "apps/web/serve.mjs"]
+  profiles: [web]
+
+services:
+  # ------------------------------------------------------------------ data --
+  db:
+    image: postgres:17-alpine
+    profiles: [data]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-forge}
+    ports: ["${FORGE_BIND:?set FORGE_BIND to this machine's private address}:5432:5432"]
+    volumes: [forge_db_data:/var/lib/postgresql/data]
+  redis:
+    image: redis:7-alpine
+    profiles: [data]
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports: ["${FORGE_BIND}:6379:6379"]
+    volumes: [forge_redis_data:/data]
+
+  # --------------------------------------------------------------- gateway --
+  gateway:
+    image: caddy:2-alpine
+    profiles: [gateway]
+    restart: unless-stopped
+    env_file: .env # FORGE_UPSTREAM_* lists where each service runs
+    ports: ["${FORGE_HTTP_PORT:-8080}:8080"]
+    volumes: [../../docker/gateway:/etc/caddy/gateway:ro]
+    command: ["caddy", "run", "--config", "/etc/caddy/gateway/Caddyfile", "--adapter", "caddyfile", "--watch"]
+
+  # -------------------------------------------------------------- web apps --
+  portal-web: { <<: *web, environment: { FORGE_WEB_APP: portal, PORT: 8081, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8081:8081"] }
+  mail-web: { <<: *web, environment: { FORGE_WEB_APP: mail, PORT: 8082, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8082:8082"] }
+  calendar-web: { <<: *web, environment: { FORGE_WEB_APP: calendar, PORT: 8083, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8083:8083"] }
+  contacts-web: { <<: *web, environment: { FORGE_WEB_APP: contacts, PORT: 8084, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8084:8084"] }
+  tasks-web: { <<: *web, environment: { FORGE_WEB_APP: tasks, PORT: 8085, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8085:8085"] }
+  admin-web: { <<: *web, environment: { FORGE_WEB_APP: admin, PORT: 8086, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8086:8086"] }
+  drive-web: { <<: *web, environment: { FORGE_WEB_APP: drive, PORT: 8087, HEALTH_PATH: /healthz, FORGE_FRAME_SOURCES: "${FORGE_OFFICE_URL:-}" }, ports: ["${FORGE_BIND}:8087:8087"] }
+  sites-web: { <<: *web, environment: { FORGE_WEB_APP: sites, PORT: 8088, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8088:8088"] }
+  team-web: { <<: *web, environment: { FORGE_WEB_APP: team, PORT: 8089, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8089:8089"] }
+
+  # ------------------------------------------------------ back-end services --
+  directory:
+    <<: *api
+    profiles: [directory]
+    environment: { <<: *env, FORGE_SERVICES: directory, PORT: 8091, FORGE_WEB_DIR: /app/apps/web/dist/portal }
+    ports: ["${FORGE_BIND}:8091:8091"]
+  mail-api: { <<: *api, profiles: [apps], environment: { <<: *env, FORGE_SERVICES: mail, PORT: 8092 }, ports: ["${FORGE_BIND}:8092:8092"] }
+  calendar-api: { <<: *api, profiles: [apps], environment: { <<: *env, FORGE_SERVICES: calendar, PORT: 8093 }, ports: ["${FORGE_BIND}:8093:8093"] }
+  contacts-api: { <<: *api, profiles: [apps], environment: { <<: *env, FORGE_SERVICES: contacts, PORT: 8094 }, ports: ["${FORGE_BIND}:8094:8094"] }
+  tasks-api: { <<: *api, profiles: [apps], environment: { <<: *env, FORGE_SERVICES: tasks, PORT: 8095 }, ports: ["${FORGE_BIND}:8095:8095"] }
+  drive-api: { <<: *api, profiles: [apps], environment: { <<: *env, FORGE_SERVICES: drive, PORT: 8097 }, ports: ["${FORGE_BIND}:8097:8097"] }
+  team-api: { <<: *api, profiles: [apps], environment: { <<: *env, FORGE_SERVICES: team, PORT: 8098 }, ports: ["${FORGE_BIND}:8098:8098"] }
+
+  worker:
+    <<: *image
+    profiles: [worker]
+    command: ["node", "apps/worker/dist/main.js"]
+    environment: *env
+    healthcheck: { disable: true } # no HTTP port to check
+    volumes: [forge_certs:/data/certs, forge_backups:/data/backups]
+
+  # ----------------------------------------------------- storage and media --
+  store:
+    <<: *image
+    profiles: [store]
+    command: ["node", "apps/mailstore/dist/main.js"]
+    environment:
+      FORGE_DATA_ROOT: /data
+      PORT: 8096
+      HEALTH_PATH: /healthz
+      REDIS_URL: redis://${FORGE_REDIS_HOST:-${FORGE_DB_HOST}}:6379
+      FORGE_SECRET: ${FORGE_SECRET}
+      # How the other machines reach this node.
+      FORGE_STORE_URL: http://${FORGE_BIND}:8096
+    ports: ["${FORGE_BIND}:8096:8096"]
+    volumes: [forge_mail_data:/data/mail, forge_drive_data:/data/drive, forge_team_media:/data/team]
+
+  media:
+    <<: *api
+    profiles: [media]
+    environment:
+      <<: *env
+      FORGE_SERVICES: media
+      PORT: 8099
+      FORGE_MEDIA_NODE_ID: media-${FORGE_MACHINE_NAME:-${FORGE_BIND}}
+      # The address browsers send audio and video to (this machine, as they see it).
+      FORGE_RTC_ANNOUNCED_IP: ${FORGE_RTC_ANNOUNCED_IP:?set FORGE_RTC_ANNOUNCED_IP to this machine's address for browsers}
+      FORGE_RTC_PORT: ${FORGE_RTC_PORT:-40000}
+    ports:
+      - "${FORGE_RTC_PORT:-40000}:${FORGE_RTC_PORT:-40000}/udp"
+      - "${FORGE_RTC_PORT:-40000}:${FORGE_RTC_PORT:-40000}/tcp"
+
+  smtp:
+    <<: *image
+    profiles: [mail]
+    command: ["node", "apps/mailserver/dist/main.js"]
+    environment: { <<: *env, FORGE_MAIL_ROLE: smtp, FORGE_IMAP_PORT: "off", FORGE_IMAPS_PORT: "off" }
+    ports: ["${FORGE_SMTP_HOST_PORT:-25}:25", "${FORGE_SUBMISSION_HOST_PORT:-587}:587", "${FORGE_SUBMISSIONS_HOST_PORT:-465}:465"]
+    sysctls: { net.ipv4.ip_unprivileged_port_start: 0 }
+    healthcheck: { disable: true } # no HTTP port to check
+    volumes: [forge_certs:/data/certs]
+  imap:
+    <<: *image
+    profiles: [mail]
+    command: ["node", "apps/mailserver/dist/main.js"]
+    environment: { <<: *env, FORGE_MAIL_ROLE: imap, FORGE_SMTP_PORT: "off", FORGE_SUBMISSION_PORT: "off", FORGE_SUBMISSIONS_PORT: "off" }
+    ports: ["${FORGE_IMAP_HOST_PORT:-143}:143", "${FORGE_IMAPS_HOST_PORT:-993}:993"]
+    sysctls: { net.ipv4.ip_unprivileged_port_start: 0 }
+    healthcheck: { disable: true } # no HTTP port to check
+    volumes: [forge_certs:/data/certs]
+
+volumes:
+  forge_db_data:
+  forge_redis_data:
+  forge_mail_data:
+  forge_drive_data:
+  forge_team_media:
+  forge_certs:
+  forge_backups:

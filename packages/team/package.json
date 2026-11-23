@@ -15,7 +15,7 @@
     "@forge/db": "workspace:*",
     "@forge/drive": "workspace:*",
     "drizzle-orm": "^0.45.4",
-    "ioredis": "^5.11.1",
+    "ioredis": "^6.0.0",
     "mediasoup": "^3.32.2"
   },
   "devDependencies": {

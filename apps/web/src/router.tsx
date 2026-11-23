@@ -159,6 +159,7 @@ const admin: RouteObject[] =
             { path: 'organisation/features', lazy: page(() => import('./pages/admin/Settings'), 'FeaturesPage') },
             { path: 'organisation/domains', lazy: page(() => import('./pages/admin/Domains'), 'DomainsPage') },
             { path: 'organisation/audit', lazy: page(() => import('./pages/admin/Audit'), 'AuditPage') },
+            { path: 'organisation/servers', lazy: page(() => import('./pages/admin/Cluster'), 'ClusterPage') },
             // Addresses from before the admin center was grouped by product.
             ...Object.entries(LEGACY_ADMIN_PATHS).map(([from, to]) => ({ path: from, element: <LegacyRedirect to={to} /> })),
           ],
