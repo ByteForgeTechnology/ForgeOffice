@@ -8,3 +8,6 @@
 	# The gateway sends each request on to the right ForgeOffice container.
 	reverse_proxy gateway:8080
 }
+
+# More sites (the installer adds one for the Office editor's domain).
+import /etc/caddy/sites/*.caddy

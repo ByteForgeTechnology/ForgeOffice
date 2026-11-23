@@ -118,4 +118,11 @@ describe('several machines: storage nodes and shared keys', () => {
       await rm(other, { recursive: true, force: true });
     }
   });
+
+  it('says why other servers cannot join an install with a built-in database, and gives no code', async () => {
+    const r = await call('GET', '/api/v1/admin/system/cluster', 'admin');
+    expect(r.json.join).toMatchObject({ available: false, reason: expect.stringContaining('built-in database') });
+    expect((await call('POST', '/api/v1/admin/system/join-code', 'admin')).status).toBe(409);
+    expect((await call('POST', '/api/v1/admin/system/join-code', null)).status).toBe(401);
+  });
 });

@@ -1,6 +1,7 @@
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, CircleSlash, HardDrive, LogOut, RotateCcw, Trash2, Video } from 'lucide-react';
-import { Alert, Badge, Button, Card, CardBody, CardHeader, EmptyState, PageHeader, PageSpinner, ProgressBar, Table, Td, Th, formatBytes, formatRelative, useToast } from '@forge/ui';
+import { CheckCircle2, CircleSlash, Copy, Eye, EyeOff, HardDrive, LogOut, RotateCcw, ServerCog, Trash2, Video } from 'lucide-react';
+import { Alert, Badge, Button, Card, CardBody, CardHeader, EmptyState, PageHeader, PageSpinner, ProgressBar, Table, Td, Textarea, Th, formatBytes, formatRelative, useToast } from '@forge/ui';
 import { api, errorMessage } from '../../lib/api';
 import { useCan } from '../../lib/hooks';
 
@@ -12,6 +13,17 @@ interface ClusterInfo {
     nodes: { id: string; url: string | null; online: boolean; draining: boolean; namespaces: string[]; freeBytes: number; totalBytes: number; blobs: Record<string, number> }[];
   };
   media: { id: string; address: string | null; meetings: number; people: number; seenAt: number }[];
+  join: JoinInfo;
+}
+
+interface JoinInfo {
+  available: boolean;
+  reason: string | null;
+  publicUrl: string;
+  databaseHost: string | null;
+  storageNodes: string[];
+  replicas: number;
+  release: string | null;
 }
 
 const NS_LABEL: Record<string, string> = { mail: 'Mail', drive: 'Drive', team: 'Recordings' };
@@ -179,6 +191,86 @@ export function ClusterPage() {
           </Table>
         )}
       </Card>
+
+      <JoinCard info={q.data.join} canManage={canManage} />
     </div>
+  );
+}
+
+/** Adding a server: the installer's join code (holds the database password and master secret). */
+function JoinCard({ info, canManage }: { info: JoinInfo; canManage: boolean }) {
+  const toast = useToast();
+  const [code, setCode] = useState<string | null>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const reveal = useMutation({
+    mutationFn: () => api<{ code: string }>('/api/v1/admin/system/join-code', { method: 'POST' }),
+    onSuccess: (r) => setCode(r.code),
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const copy = async () => {
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch {
+      // No clipboard API on plain-HTTP addresses: copy the selected text instead.
+      box.current?.select();
+      if (!document.execCommand('copy')) return toast.error('Select the code and copy it yourself');
+    }
+    toast.success('Join code copied');
+  };
+
+  return (
+    <Card>
+      <CardHeader title="Add a server" description="Run part of ForgeOffice on another server, or more copies of a part to share the load." />
+      <CardBody className="space-y-4">
+        {!info.available ? (
+          <EmptyState icon={<ServerCog />} title="Other servers can’t join this ForgeOffice" description={info.reason ?? undefined} />
+        ) : (
+          <>
+            <ol className="list-decimal space-y-1 pl-5 text-sm">
+              <li>
+                Copy the ForgeOffice release{info.release ? <> (<span className="font-mono">{info.release}</span>)</> : null} to the new server and unzip it.
+              </li>
+              <li>
+                Run <span className="font-mono">sudo ./install.sh</span>, choose <strong>Custom</strong>, then <strong>Join a ForgeOffice running on other servers</strong>.
+              </li>
+              <li>Paste the join code below, and tick the parts the new server should run.</li>
+              <li>If it runs web apps, the Directory or app back ends, run the installer again on the gateway’s server and add it under <strong>Other servers</strong>. Storage nodes and media servers appear on this page by themselves.</li>
+            </ol>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+              <dt className="text-zinc-500">Web address</dt>
+              <dd className="font-mono break-all">{info.publicUrl}</dd>
+              <dt className="text-zinc-500">Database</dt>
+              <dd className="font-mono">{info.databaseHost}:5432</dd>
+              <dt className="text-zinc-500">Storage nodes</dt>
+              <dd className="font-mono break-all">{info.storageNodes.join(', ')}</dd>
+              <dt className="text-zinc-500">Copies of each file</dt>
+              <dd>{info.replicas}</dd>
+            </dl>
+            <p className="text-sm text-zinc-500">The new server must reach the database server on ports 5432 and 6379, and the storage nodes on port 8096. Keep those ports closed to the internet.</p>
+            {!canManage ? (
+              <Alert tone="info">Only administrators who can manage the system can see the join code.</Alert>
+            ) : code ? (
+              <div className="space-y-2">
+                <Alert tone="warning">Keep this code secret: it holds the database password and the master secret, so anyone with it can read everything in ForgeOffice. Viewing it is recorded in the audit log.</Alert>
+                <Textarea ref={box} readOnly value={code} rows={4} className="font-mono text-xs break-all" onFocus={(e) => e.currentTarget.select()} aria-label="Join code" />
+                <div className="flex gap-2">
+                  <Button variant="primary" icon={<Copy className="size-4" />} onClick={() => void copy()}>
+                    Copy
+                  </Button>
+                  <Button variant="ghost" icon={<EyeOff className="size-4" />} onClick={() => setCode(null)}>
+                    Hide
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button icon={<Eye className="size-4" />} loading={reveal.isPending} onClick={() => reveal.mutate()}>
+                Show join code
+              </Button>
+            )}
+          </>
+        )}
+      </CardBody>
+    </Card>
   );
 }

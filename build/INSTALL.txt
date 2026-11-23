@@ -1,0 +1,75 @@
+ForgeOffice @VERSION@ (@ARCH@) - installing with Docker
+=======================================================
+
+What you need: a 64-bit Linux server (@ARCH@) with internet access and at least 4 GB of memory
+(8 GB with virus scanning and Office editing). For mail from the internet: ports 25, 587, 465, 143 and
+993 open, and a host name for the mail server (e.g. mail.example.com).
+
+The easy way
+------------
+   unzip forgeoffice-@VERSION@-@ARCH@.zip
+   cd forgeoffice-@VERSION@-@ARCH@
+   sudo ./install.sh
+
+   The installer sets up Docker if the server doesn't have it, then asks how ForgeOffice should run:
+
+   Express   all of ForgeOffice on this server. It asks how people will reach it (your own domain with
+             HTTPS, or a port), the mail server's name, and whether to add virus scanning and Office
+             editing. Then it starts ForgeOffice: open the address it shows and enter the setup token.
+
+   Custom    the parts you choose, to spread ForgeOffice over several servers or run more copies of a
+             part. On the first server choose "A new ForgeOffice"; it keeps the database and writes a
+             join code to join-code.txt in its install folder. On each further server, run the same
+             release's install.sh, choose Custom > Join, paste the join code, and tick the parts it runs:
+
+                Database and Redis     one server only (the first)
+                Gateway                the address people open (with the HTTPS proxy, if you like)
+                Web apps, Directory,   any number of servers; tell the gateway where they run (run
+                App back ends          install.sh again on the gateway's server > Other servers)
+                Mail server            SMTP and IMAP
+                Storage node           any number: every file is kept on two of them
+                Meeting server         any number: each meeting runs on the least busy one
+                Background jobs        one or more
+
+             The servers reach each other on their private addresses: keep ports 5432, 6379 and
+             8081-8099 open between them and closed to the internet.
+
+   To upgrade later, run install.sh from the newer release in the same way (on every server, starting
+   with the one running the Directory).
+
+By hand
+-------
+1. Load the image (once per version):
+       docker load -i forgeoffice-@VERSION@-@ARCH@.tar.gz
+
+2. Create the settings file:
+       cp env.example .env
+   Set FORGE_PUBLIC_URL (the address people open), FORGE_MAIL_HOSTNAME, a long random
+   POSTGRES_PASSWORD and FORGE_SECRET (openssl rand -hex 32). Every setting is explained in the file.
+
+3. Start ForgeOffice:
+       docker compose up -d
+   The setup token is in the log:  docker compose logs directory | grep -A3 "setup token"
+   Open FORGE_PUBLIC_URL and follow the setup wizard.
+
+   Several servers by hand: use compose.multi.yml instead (COMPOSE_FILE=compose.multi.yml in .env); the
+   comments at its top list the settings each server needs.
+
+HTTPS (optional, recommended)
+-----------------------------
+   Edit .env:  COMPOSE_PROFILES=tls   FORGE_DOMAIN=office.example.com   FORGE_HTTP_BIND=127.0.0.1
+               FORGE_PUBLIC_URL=https://office.example.com
+   Then:       docker compose up -d
+   A free certificate is fetched and renewed for the domain (it must point at this server, and ports 80
+   and 443 must be open). Meetings need HTTPS for cameras and microphones.
+
+Your data
+---------
+   Mail, files, recordings and the database are kept in Docker volumes, so they survive restarts and
+   upgrades. A backup is made every night; see the admin center's Overview page.
+
+Removing ForgeOffice
+--------------------
+   sudo ./uninstall.sh   (from the release folder, or from the install folder, e.g. /opt/forgeoffice)
+   Choose to keep ForgeOffice's data (run install.sh again to bring it back as it was), or to delete
+   everything. Docker itself is left alone.

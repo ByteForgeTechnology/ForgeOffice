@@ -28,6 +28,8 @@ export interface AppConfig {
   /** Installation master secret. Resolved at boot (env or persisted file). */
   secret: string | null;
   setupToken: string | null;
+  /** The release image every server runs (FORGE_IMAGE, written by the installer). */
+  image: string | null;
   trustProxy: boolean;
   logLevel: string;
   volumes: Record<VolumeKey, ForgeVolume>;
@@ -120,6 +122,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     redisUrl: env.REDIS_URL || null,
     secret: env.FORGE_SECRET || null,
     setupToken: env.FORGE_SETUP_TOKEN || null,
+    image: env.FORGE_IMAGE || null,
     trustProxy: env.FORGE_TRUST_PROXY ? env.FORGE_TRUST_PROXY === 'true' : nodeEnv === 'production',
     logLevel: env.LOG_LEVEL ?? (nodeEnv === 'production' ? 'info' : 'debug'),
     volumes: resolveVolumes({ ...env, FORGE_DATA_ROOT: dataRoot }),

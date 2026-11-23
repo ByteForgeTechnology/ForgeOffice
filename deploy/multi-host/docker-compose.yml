@@ -4,7 +4,7 @@
 # env.example). Each machine runs the roles it should host:
 #
 #   COMPOSE_PROFILES=data                      Postgres + Redis (exactly one machine)
-#   COMPOSE_PROFILES=gateway,web,directory      the front door, web apps, sign-in
+#   COMPOSE_PROFILES=gateway,web,directory      the front door, web apps, sign-in (add tls for HTTPS)
 #   COMPOSE_PROFILES=apps                       mail-api, calendar, contacts, tasks, drive, team
 #   COMPOSE_PROFILES=mail                       SMTP + IMAP
 #   COMPOSE_PROFILES=store                      a storage node (as many machines as you like)
@@ -73,9 +73,19 @@ services:
     profiles: [gateway]
     restart: unless-stopped
     env_file: .env # FORGE_UPSTREAM_* lists where each service runs
-    ports: ["${FORGE_HTTP_PORT:-8080}:8080"]
+    ports: ["${FORGE_HTTP_BIND:-0.0.0.0}:${FORGE_HTTP_PORT:-8080}:8080"]
     volumes: [../../docker/gateway:/etc/caddy/gateway:ro]
     command: ["caddy", "run", "--config", "/etc/caddy/gateway/Caddyfile", "--adapter", "caddyfile", "--watch"]
+
+  # HTTPS on your own domain in front of the gateway (Let's Encrypt), on the
+  # gateway machine: COMPOSE_PROFILES=…,tls and FORGE_DOMAIN in .env.
+  caddy:
+    image: caddy:2-alpine
+    profiles: [tls]
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment: { FORGE_DOMAIN: "${FORGE_DOMAIN:-localhost}" }
+    volumes: [../../docker/Caddyfile:/etc/caddy/Caddyfile:ro, ../../docker/sites:/etc/caddy/sites:ro, forge_certs:/data/certs]
 
   # -------------------------------------------------------------- web apps --
   portal-web: { <<: *web, environment: { FORGE_WEB_APP: portal, PORT: 8081, HEALTH_PATH: /healthz }, ports: ["${FORGE_BIND}:8081:8081"] }

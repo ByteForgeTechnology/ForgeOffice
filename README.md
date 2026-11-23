@@ -16,11 +16,33 @@ I have been very inspired by the work of [Artcraft](https://github.com/storytold
 - **Phase 2 – ForgeMail:** SMTP and IMAP servers written in Node.js, webmail, server-side rules, auto-replies, quarantine, calendars and contacts with CalDAV/CardDAV, meeting rooms and free/busy.
 - **Phase 3 – ForgeDrive & ForgeSites:** file libraries with resumable uploads, de-duplicated storage, versions, a recycle bin, inherited permissions, sharing links, check-out, previews, full-text search, optional virus scanning (ClamAV) and Office editing (Euro-Office); intranet sites with pages, news and widgets.
 - **Phase 4 – ForgeTeam:** teams and channels (public and private), one-to-one and group chats, threads, reactions, mentions, markdown, files kept in Drive, presence synced with calls and the calendar, and audio/video meetings with screen sharing, guests (via a lobby) and recording, on a mediasoup SFU.
+- **Several machines and installers:** run any part of ForgeOffice on several servers (plain Docker or Docker Swarm), with replicated storage nodes and several meeting servers; a release package with a menu-driven installer offering an express install (everything on one server) or a custom one (choose the parts; start a new ForgeOffice or join an existing one).
 
 ## Still left todo
-- **Build containers and installers:** I plan on building a graphical (ish) installer that you can run in a bash command line. Here you will be able to select an express install that will install one copy of each role on the server or do a custom deployment where it will ask you what components you want to install and if you are deploying a new install or joining an existing one.
 - **ForgeManage:** A mobile device manager component that will allow you to control, patch, policy and deploy software. (Similar to Intune)
 - **Desktop client:** Build a desktop client that will sign in the user on a desktop and all the apps. It should include notifications from ForgeTeam.
+
+## Installing on a server
+
+Build a release (on a machine with Docker and this source):
+
+```bash
+build/build.sh          # → dist/forgeoffice-<version>-build-<n>-<arch>.zip
+```
+
+The zip holds the image, the compose files, `install.sh`, `uninstall.sh` and `INSTALL.txt`. Copy it to the server, then:
+
+```bash
+unzip forgeoffice-*.zip && cd forgeoffice-*/
+sudo ./install.sh
+```
+
+The installer installs Docker if needed and asks how ForgeOffice should run:
+
+- **Express:** everything on this server, on your own domain with HTTPS or on a port, with optional virus scanning and Office editing.
+- **Custom:** the parts you tick. The first server of a new ForgeOffice keeps the database and writes a join code (`/opt/forgeoffice/join-code.txt`). Further servers choose **Join** and paste it.
+
+It writes `/opt/forgeoffice/.env`, starts the containers, waits until they answer, and shows the address and setup token. Running a newer release's `install.sh` upgrades an install, keeping its data. `uninstall.sh` removes ForgeOffice, with or without its data. `build/build.sh --platform linux/arm64` builds for ARM servers.
 
 ## Quick start (Docker)
 

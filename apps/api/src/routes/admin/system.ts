@@ -8,6 +8,7 @@ import type { AppContext } from '../../context';
 import { HttpError, conflict, notFound } from '../../errors';
 import { authenticate, requirePermission } from '../../plugins/auth';
 import { systemOverview } from '../../services/system';
+import { joinCode, joinInfo } from '../../services/join';
 import type { App } from '../../types';
 
 const { desc, eq, inArray } = orm;
@@ -189,8 +190,24 @@ export function adminSystemRoutes(app: App, ctx: AppContext) {
         ],
       },
       media: (await ctx.team.media.directory.nodes()).map((n) => ({ id: n.id, address: n.address, meetings: n.meetings.length, people: n.peers, seenAt: n.seenAt })),
+      // Whether another server can join, and with what (the code itself is fetched separately).
+      join: joinInfo(ctx.config),
     };
   });
+
+  // The installer's join code: database password and master secret, so system:manage only, and audited.
+  app.post(
+    '/api/v1/admin/system/join-code',
+    { preHandler: requirePermission(ctx, 'system:manage'), schema: { tags: ['admin: system'], summary: 'The join code another server’s installer needs (holds the database password and master secret)' } },
+    async (req, reply) => {
+      const info = joinInfo(ctx.config);
+      if (!info.available) throw new HttpError(409, info.reason ?? 'Other servers can’t join this ForgeOffice', 'join_unavailable');
+      const code = joinCode(ctx.config);
+      await ctx.audit.fromRequest(req, { action: 'system.join_code_viewed', targetType: 'system', targetLabel: info.publicUrl });
+      reply.header('cache-control', 'no-store');
+      return { code };
+    },
+  );
 
   app.put(
     '/api/v1/admin/system/storage/:id',
