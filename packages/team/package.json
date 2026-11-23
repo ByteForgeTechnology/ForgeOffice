@@ -1,0 +1,24 @@
+{
+  "name": "@forge/team",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forge/calendar": "workspace:*",
+    "@forge/db": "workspace:*",
+    "@forge/drive": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "ioredis": "^5.11.1",
+    "mediasoup": "^3.32.2"
+  },
+  "devDependencies": {
+    "vitest": "^5.1.0"
+  }
+}

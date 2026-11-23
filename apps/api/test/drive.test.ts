@@ -403,7 +403,7 @@ describe('ForgeDrive over HTTP', () => {
     const rawUrl = (await call('GET', `/api/v1/drive/items/${doc.id}/url`, 'alice')).json.url;
     const admin = '/api/v1/admin/drive/sites/' + site.id;
     const row = async () => (await call('GET', '/api/v1/admin/drive/libraries', 'admin')).json.items.find((l: { id: string }) => l.id === site.libraryId);
-    expect(await row()).toMatchObject({ kind: 'site', siteId: site.id, siteSlug: site.slug, disabledAt: null });
+    expect(await row()).toMatchObject({ kind: 'site', siteId: site.id, siteSlug: site.slug, disabledAt: null, items: 1 });
     // Drive says whose documents these are.
     expect((await call('GET', `/api/v1/drive/libraries/${site.libraryId}/items`, 'bob')).json.library).toMatchObject({ kind: 'site', mine: false, everyone: true, site: { name: 'Old intranet', slug: site.slug } });
     expect((await call('GET', `/api/v1/drive/libraries/${lib}/items`, 'alice')).json.library).toMatchObject({ kind: 'personal', mine: true, owner: 'Alice', site: null });

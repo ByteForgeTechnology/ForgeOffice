@@ -66,6 +66,9 @@ const publicRoutes: RouteObject[] =
       ]
     : [];
 
+// Meetings open for guests too (and full-screen), in the team app.
+const teamPublic: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'team' ? [{ path: '/team/meet/:code', lazy: page(() => import('./pages/team/Meeting'), 'MeetingPage') }] : [];
+
 // Shared links open without signing in, in the drive app.
 const drivePublic: RouteObject[] = __FORGE_APP__ === 'all' || __FORGE_APP__ === 'drive' ? [{ path: '/drive/s/:token', lazy: page(() => import('./pages/drive/Share'), 'SharePage') }] : [];
 
@@ -109,6 +112,14 @@ const sites: RouteObject[] =
       ]
     : [];
 
+const team: RouteObject[] =
+  __FORGE_APP__ === 'all' || __FORGE_APP__ === 'team'
+    ? [
+        { path: 'team', lazy: page(() => import('./pages/team/Team'), 'TeamPage') },
+        { path: 'team/c/:channelId', lazy: page(() => import('./pages/team/Team'), 'TeamPage') },
+      ]
+    : [];
+
 const admin: RouteObject[] =
   __FORGE_APP__ === 'all' || __FORGE_APP__ === 'admin'
     ? [
@@ -140,6 +151,9 @@ const admin: RouteObject[] =
             // ForgeDrive
             { path: 'drive/settings', lazy: page(() => import('./pages/admin/DriveAdmin'), 'DriveSettingsPage') },
             { path: 'drive/libraries', lazy: page(() => import('./pages/admin/DriveAdmin'), 'DriveLibrariesPage') },
+            // ForgeTeam
+            { path: 'team/settings', lazy: page(() => import('./pages/admin/TeamAdmin'), 'TeamSettingsPage') },
+            { path: 'team/teams', lazy: page(() => import('./pages/admin/TeamAdmin'), 'TeamsAdminPage') },
             // Organisation
             { path: 'organisation/settings', lazy: page(() => import('./pages/admin/Settings'), 'SettingsPage') },
             { path: 'organisation/features', lazy: page(() => import('./pages/admin/Settings'), 'FeaturesPage') },
@@ -156,6 +170,7 @@ const admin: RouteObject[] =
 const elsewhere: RouteObject[] = [
   ...(WEB_APP === 'all' || WEB_APP === 'portal' ? [] : [{ path: '/setup' }, { path: '/interaction/:uid' }, { path: '/auth/callback' }, { path: '/signed-out' }]),
   ...(WEB_APP === 'all' || WEB_APP === 'drive' ? [] : [{ path: '/drive/s/:token' }]),
+  ...(WEB_APP === 'all' || WEB_APP === 'team' ? [] : [{ path: '/team/meet/:code' }]),
 ].map((r) => ({ ...r, element: <OtherAppOrNotFound /> }));
 
 export const router = createBrowserRouter([
@@ -165,6 +180,7 @@ export const router = createBrowserRouter([
     children: [
       ...publicRoutes,
       ...drivePublic,
+      ...teamPublic,
       ...elsewhere,
       {
         element: (
@@ -180,6 +196,7 @@ export const router = createBrowserRouter([
           ...tasks,
           ...drive,
           ...sites,
+          ...team,
           ...admin,
           // The home page lives in the portal app.
           ...(WEB_APP !== 'all' && WEB_APP !== 'portal' ? [{ index: true, element: <OtherAppOrNotFound /> }] : []),

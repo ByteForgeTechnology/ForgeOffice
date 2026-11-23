@@ -45,7 +45,7 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
 };
 
-const OTHER_APPS = ['mail', 'calendar', 'contacts', 'tasks', 'admin', 'drive', 'sites'];
+const OTHER_APPS = ['mail', 'calendar', 'contacts', 'tasks', 'admin', 'drive', 'sites', 'team'];
 function ownsPath(path) {
   const first = path.split('/')[1] ?? '';
   if (BASE === '/') return APP === 'all' || !OTHER_APPS.includes(first);

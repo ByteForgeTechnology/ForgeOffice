@@ -27,7 +27,7 @@ const updatedAt = () =>
 // Organizations & domains
 // ---------------------------------------------------------------------------
 
-export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks' | 'drive';
+export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks' | 'drive' | 'team';
 export type FeatureFlags = Record<Feature, boolean>;
 export interface DriveSettings {
   /** Days items stay in recycle bins before they are deleted for good. */
@@ -39,6 +39,17 @@ export interface DriveSettings {
   linkMaxDays: number | null;
 }
 export const DEFAULT_DRIVE_SETTINGS: DriveSettings = { trashDays: 93, maxUploadMb: 10240, externalSharing: true, linkMaxDays: null };
+export interface TeamSettings {
+  /** People outside the organisation may join meetings from a link (after being admitted). */
+  guestAccess: boolean;
+  /** Meetings may be recorded (to forge_team_media). */
+  recording: boolean;
+  /** Who may create teams: everyone, or only admins. */
+  createTeams: 'everyone' | 'admins';
+  /** Most people in one meeting. */
+  maxParticipants: number;
+}
+export const DEFAULT_TEAM_SETTINGS: TeamSettings = { guestAccess: true, recording: true, createTeams: 'everyone', maxParticipants: 50 };
 
 export const organizations = pgTable('organizations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -57,7 +68,9 @@ export const organizations = pgTable('organizations', {
   /** Optional products switched on for the organisation (ForgeDirectory is always on). */
   /** ForgeDrive policies (Admin → ForgeDrive → Settings). */
   driveSettings: jsonb('drive_settings').$type<DriveSettings>().notNull().default({ trashDays: 93, maxUploadMb: 10240, externalSharing: true, linkMaxDays: null }),
-  features: jsonb('features').$type<FeatureFlags>().notNull().default({ mail: true, calendar: true, contacts: true, tasks: true, drive: true }),
+  features: jsonb('features').$type<FeatureFlags>().notNull().default({ mail: true, calendar: true, contacts: true, tasks: true, drive: true, team: true }),
+  /** ForgeTeam policies (Admin → ForgeTeam → Settings). */
+  teamSettings: jsonb('team_settings').$type<TeamSettings>().notNull().default({ guestAccess: true, recording: true, createTeams: 'everyone', maxParticipants: 50 }),
   /** Largest message accepted by SMTP and the composer. */
   mailMaxMessageBytes: integer('mail_max_message_bytes').notNull().default(35 * 1024 * 1024),
   /** Seconds a sent message is held so the user can undo it. */
@@ -168,6 +181,8 @@ export const users = pgTable(
     usedBytes: bigint('used_bytes', { mode: 'number' }).notNull().default(0),
     failedLoginCount: integer('failed_login_count').notNull().default(0),
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    /** Profile picture: a 512×512 WebP in the blob store (by SHA-256). */
+    avatarSha: text('avatar_sha'),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
     passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
     suspendedAt: timestamp('suspended_at', { withTimezone: true }),

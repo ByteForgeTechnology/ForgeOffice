@@ -16,6 +16,7 @@ export const WEB_APPS = [
   { app: 'admin', prefix: '/admin', host: 'admin-web', port: 8086 },
   { app: 'drive', prefix: '/drive', host: 'drive-web', port: 8087 },
   { app: 'sites', prefix: '/sites', host: 'sites-web', port: 8088 },
+  { app: 'team', prefix: '/team', host: 'team-web', port: 8089 },
 ] as const;
 /** Everything else (home, account, sign-in pages, shared assets) is the portal. */
 export const PORTAL = { app: 'portal', host: 'portal-web', port: 8081 } as const;
@@ -27,6 +28,7 @@ export const SERVICE_HOSTS: Record<ServiceName, string> = {
   contacts: 'contacts-api',
   tasks: 'tasks-api',
   drive: 'drive-api',
+  team: 'team-api',
 };
 
 /** Routes outside the services' route tables. */
@@ -35,6 +37,8 @@ const EXTRA: Record<string, ServiceName> = {
   '/oidc/*': 'directory',
   '/interaction/*': 'directory',
   '/socket.io/*': 'directory',
+  // ForgeTeam: messages, typing, presence and meeting signalling.
+  '/team-socket/*': 'team',
   '/api/docs': 'directory',
   '/api/docs/*': 'directory',
   '/healthz': 'directory',

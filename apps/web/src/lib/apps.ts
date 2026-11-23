@@ -3,8 +3,8 @@ import type { LauncherApp } from '@forge/ui';
 import type { Feature, FeatureFlags } from './types';
 
 /** Launcher entries; apps whose product is switched off are left out. */
-export function launcherApps(isAdmin: boolean, features: FeatureFlags = { mail: true, calendar: true, contacts: true, tasks: true, drive: true }): LauncherApp[] {
-  const needs: Record<string, Feature> = { mail: 'mail', calendar: 'calendar', people: 'contacts', tasks: 'tasks', drive: 'drive', sites: 'drive' };
+export function launcherApps(isAdmin: boolean, features: FeatureFlags = { mail: true, calendar: true, contacts: true, tasks: true, drive: true, team: true }): LauncherApp[] {
+  const needs: Record<string, Feature> = { mail: 'mail', calendar: 'calendar', people: 'contacts', tasks: 'tasks', drive: 'drive', sites: 'drive', team: 'team' };
   return ([
     { id: 'home', name: 'Home', description: 'Your ForgeOffice portal', href: '/', icon: Home, color: 'bg-brand', available: true },
     { id: 'mail', name: 'Mail', description: 'Email with conversations and rules', href: '/mail', icon: Mail, color: 'bg-sky-600', available: true },
@@ -13,7 +13,7 @@ export function launcherApps(isAdmin: boolean, features: FeatureFlags = { mail: 
     { id: 'people', name: 'People', description: 'Contacts and the organisation directory', href: '/contacts', icon: Users, color: 'bg-teal-600', available: true },
     { id: 'drive', name: 'Drive', description: 'Files, folders and shared libraries', href: '/drive', icon: FolderOpen, color: 'bg-emerald-600', available: true },
     { id: 'sites', name: 'Sites', description: 'Intranet sites, wikis and news', href: '/sites', icon: Newspaper, color: 'bg-cyan-700', available: true },
-    { id: 'team', name: 'Team', description: 'Chat, channels and meetings', href: '/apps/team', icon: MessagesSquare, color: 'bg-violet-600', available: false },
+    { id: 'team', name: 'Team', description: 'Chat, channels and meetings', href: '/team', icon: MessagesSquare, color: 'bg-violet-600', available: true },
     { id: 'account', name: 'Account', description: 'Profile and security', href: '/account', icon: UserCircle2, color: 'bg-zinc-600', available: true },
     ...(isAdmin ? [{ id: 'admin', name: 'Admin', description: 'Admin center', href: '/admin', icon: Settings2, color: 'bg-amber-600', available: true }] : []),
   ] as LauncherApp[]).filter((a) => !needs[a.id] || features[needs[a.id]!]);

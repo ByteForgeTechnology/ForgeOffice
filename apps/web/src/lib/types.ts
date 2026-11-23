@@ -6,6 +6,7 @@ export interface User {
   email: string;
   domainId: string;
   displayName: string;
+  avatarUrl?: string | null;
   givenName: string | null;
   familyName: string | null;
   jobTitle: string | null;
@@ -90,6 +91,7 @@ export interface DirectoryCard {
   id: string;
   email: string;
   displayName: string;
+  avatarUrl?: string | null;
   jobTitle: string | null;
   department: string | null;
 }
@@ -218,6 +220,6 @@ export const CONTACT_FIELDS = [
 export type ContactKey = (typeof CONTACT_FIELDS)[number]['key'];
 
 /** Optional products an administrator can switch off (ForgeDirectory is always on). */
-export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks' | 'drive';
+export type Feature = 'mail' | 'calendar' | 'contacts' | 'tasks' | 'drive' | 'team';
 export type FeatureFlags = Record<Feature, boolean>;
-export const FEATURE_NAMES: Record<Feature, string> = { mail: 'ForgeMail', calendar: 'ForgeCalendar', contacts: 'ForgeContacts', tasks: 'ForgeTasks', drive: 'ForgeDrive' };
+export const FEATURE_NAMES: Record<Feature, string> = { mail: 'ForgeMail', calendar: 'ForgeCalendar', contacts: 'ForgeContacts', tasks: 'ForgeTasks', drive: 'ForgeDrive', team: 'ForgeTeam' };

@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Signature,
   Users,
+  Video,
   UsersRound,
   type LucideIcon,
 } from 'lucide-react';
@@ -168,15 +169,21 @@ export const ADMIN_NAV: NavSection[] = [
   },
   {
     title: 'ForgeTeam',
+    feature: 'team',
     items: [
       {
-        to: '',
-        label: 'Coming in phase 4',
+        to: '/admin/team/settings',
+        label: 'Meetings & policies',
+        icon: Video,
+        perm: 'org:read',
+      },
+      {
+        to: '/admin/team/teams',
+        label: 'Teams',
         icon: MessagesSquare,
-        perm: 'system:read',
+        perm: 'groups:read',
       },
     ],
-    comingSoon: 'phase 4',
   },
   {
     title: 'Organisation',

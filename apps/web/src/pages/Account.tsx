@@ -8,6 +8,7 @@ import { api, errorMessage } from '../lib/api';
 import { useMe } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { DeviceList, type DeviceSession } from '../components/Devices';
+import { EditableAvatar } from '../components/ProfilePicture';
 import type { Enrollment } from '../lib/types';
 import { EnrollForm } from './SignIn';
 
@@ -64,7 +65,7 @@ function ProfileCard() {
           }}
         >
           <div className="flex items-center gap-4">
-            <Avatar name={displayName || me!.user.displayName} size="lg" />
+            <EditableAvatar name={displayName || me!.user.displayName} src={me!.user.avatarUrl} endpoint="/api/v1/me/avatar" size="lg" onChanged={() => void qc.invalidateQueries({ queryKey: ['me'] })} />
             <div className="text-sm text-zinc-500">
               <p>{me!.user.jobTitle ?? 'No job title'}</p>
               <p>{me!.user.department ?? 'No department'}</p>

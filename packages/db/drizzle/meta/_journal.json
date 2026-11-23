@@ -134,6 +134,20 @@
       "when": 1795428384969,
       "tag": "0018_library_disabled",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795429589117,
+      "tag": "0019_team",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1795431998467,
+      "tag": "0020_user_avatar",
+      "breakpoints": true
     }
   ]
 }

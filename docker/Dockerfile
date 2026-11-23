@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # One image runs every ForgeOffice container: the back-end services, web apps,
-# drive, mail-store, SMTP, IMAP and the worker (see docker-compose.yml).
+# drive, team (with the meeting SFU), mail-store, SMTP, IMAP and the worker (see docker-compose.yml).
 
 ARG NODE_VERSION=24
 FROM node:${NODE_VERSION}-trixie-slim AS base
@@ -23,6 +23,7 @@ COPY packages/storage/package.json packages/storage/
 COPY packages/mail/package.json packages/mail/
 COPY packages/calendar/package.json packages/calendar/
 COPY packages/drive/package.json packages/drive/
+COPY packages/team/package.json packages/team/
 COPY packages/ui/package.json packages/ui/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 COPY . .
@@ -47,15 +48,17 @@ COPY --from=build /app/packages/storage/package.json packages/storage/
 COPY --from=build /app/packages/mail/package.json packages/mail/
 COPY --from=build /app/packages/calendar/package.json packages/calendar/
 COPY --from=build /app/packages/drive/package.json packages/drive/
+COPY --from=build /app/packages/team/package.json packages/team/
 COPY --from=build /app/packages/ui/package.json packages/ui/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile --prod
 
 # ---- runtime ----------------------------------------------------------------
 FROM node:${NODE_VERSION}-trixie-slim AS runtime
 # pg_dump for backups (client 17 matches the postgres:17 server), tar for volume
-# archives, tini as PID 1 for correct signal handling.
+# archives, ffmpeg for ForgeTeam meeting recordings, tini as PID 1 for correct
+# signal handling.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client-17 tar gzip tini ca-certificates \
+ && apt-get install -y --no-install-recommends postgresql-client-17 tar gzip ffmpeg tini ca-certificates \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production FORGE_DATA_ROOT=/data PORT=8080 HEALTH_PATH=/readyz
@@ -72,7 +75,7 @@ RUN mkdir -p /data/mail /data/drive /data/team /data/certs /data/backups \
  && chown -R node:node /data \
  && chmod 700 /data/certs
 USER node
-EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8091 8092 8093 8094 8095 8096 8097 25 587 465 143 993
+EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8089 8091 8092 8093 8094 8095 8096 8097 8098 40000-40099/udp 40000-40099/tcp 25 587 465 143 993
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "apps/api/dist/main.js"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \

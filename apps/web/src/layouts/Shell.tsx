@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { LogOut, Search, Settings2, ShieldCheck, UserCircle2, Users } from 'lucide-react';
+import { Camera, LogOut, Search, Settings2, ShieldCheck, UserCircle2, Users } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { EditableAvatar, ProfilePictureDialog } from '../components/ProfilePicture';
 import { AppLauncher, Avatar, ThemeSwitcher, cn } from '@forge/ui';
 import { api } from '../lib/api';
 import { launcherApps } from '../lib/apps';
@@ -20,7 +22,7 @@ export function Shell() {
   const features = useFeatures();
   const { pathname } = useLocation();
   // Mail and Calendar use the full viewport height with their own panes.
-  const fullBleed = pathname === '/mail' || pathname === '/calendar' || pathname === '/tasks' || pathname === '/drive';
+  const fullBleed = pathname === '/mail' || pathname === '/calendar' || pathname === '/tasks' || pathname === '/drive' || pathname === '/team' || pathname.startsWith('/team/');
 
   return (
     <div className={cn('flex flex-col', fullBleed ? 'h-dvh overflow-hidden' : 'min-h-screen')}>
@@ -65,7 +67,7 @@ function FeatureGate() {
   const { pathname } = useLocation();
   const features = useFeatures();
   const app = appForPath(pathname);
-  const feature = app === 'drive' || app === 'sites' ? 'drive' : app === 'contacts' ? 'contacts' : app === 'mail' || app === 'calendar' || app === 'tasks' ? app : null;
+  const feature = app === 'team' ? 'team' : app === 'drive' || app === 'sites' ? 'drive' : app === 'contacts' ? 'contacts' : app === 'mail' || app === 'calendar' || app === 'tasks' ? app : null;
   if (feature && !features[feature]) return <FeatureOff feature={feature} />;
   return <Outlet />;
 }
@@ -130,7 +132,7 @@ function GlobalSearch() {
               }}
               className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
-              <Avatar name={p.displayName} size="sm" />
+              <Avatar name={p.displayName} src={p.avatarUrl} size="sm" />
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium">{p.displayName}</span>
                 <span className="block truncate text-xs text-zinc-500">{p.jobTitle ?? p.email}</span>
@@ -168,6 +170,8 @@ function UserMenu() {
   const { data: me } = useMe();
   const { signOut } = useAuth();
   const [open, setOpen] = useState(false);
+  const [picture, setPicture] = useState(false);
+  const qc = useQueryClient();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -186,18 +190,25 @@ function UserMenu() {
   return (
     <div ref={ref} className="relative">
       <button type="button" aria-label="Account menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} className="rounded-full ring-2 ring-white/30 hover:ring-white/60">
-        <Avatar name={name} size="sm" />
+        <Avatar name={name} src={me?.user.avatarUrl} size="sm" />
       </button>
       {open && (
         <div className="absolute top-11 right-0 z-40 w-72 rounded-xl border border-zinc-200 bg-white p-2 text-zinc-900 shadow-xl dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100">
           <div className="flex items-center gap-3 px-2 py-2">
-            <Avatar name={name} />
+            {me ? (
+              <EditableAvatar name={name} src={me.user.avatarUrl} endpoint="/api/v1/me/avatar" size="lg" onChanged={() => void qc.invalidateQueries({ queryKey: ['me'] })} />
+            ) : (
+              <Avatar name={name} />
+            )}
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{name}</p>
               <p className="truncate text-xs text-zinc-500">{me?.user.email}</p>
             </div>
           </div>
           <div className="my-1 border-t border-zinc-200 dark:border-zinc-800" />
+          <button type="button" onClick={() => (setOpen(false), setPicture(true))} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800">
+            <Camera className="size-4" /> {me?.user.avatarUrl ? 'Change profile picture' : 'Add a profile picture'}
+          </button>
           <MenuLink to="/account" icon={<UserCircle2 className="size-4" />} onClick={() => setOpen(false)}>
             Account settings
           </MenuLink>
@@ -224,6 +235,7 @@ function UserMenu() {
           </button>
         </div>
       )}
+      {picture && me && <ProfilePictureDialog name={name} current={me.user.avatarUrl} endpoint="/api/v1/me/avatar" onClose={() => setPicture(false)} onChanged={() => void qc.invalidateQueries({ queryKey: ['me'] })} />}
     </div>
   );
 }

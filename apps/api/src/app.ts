@@ -40,6 +40,9 @@ import { drivePublicRoutes } from './routes/drive-public';
 import { siteRoutes } from './routes/sites';
 import { starRoutes } from './routes/stars';
 import { adminDriveRoutes } from './routes/admin/drive';
+import { teamRoutes } from './routes/team';
+import { adminTeamRoutes } from './routes/admin/team';
+import { MediaError, TeamError } from '@forge/team';
 import { DriveAccessError, DriveError, LockedError } from '@forge/drive';
 import type { App } from './types';
 import { initSharing } from './services/sharing';
@@ -56,6 +59,7 @@ const SERVICE_ROUTES: Record<ServiceName, Registrar[]> = {
   contacts: [contactRoutes, davRoutes],
   tasks: [taskRoutes],
   drive: [driveRoutes, drivePublicRoutes, siteRoutes, starRoutes, adminDriveRoutes],
+  team: [teamRoutes, adminTeamRoutes],
 };
 
 /** Route groups that belong to an optional product (Admin → Organisation → Features). DAV checks per collection. */
@@ -74,6 +78,8 @@ const ROUTE_FEATURES = new Map<Registrar, Feature>([
   [siteRoutes, 'drive'],
   [starRoutes, 'drive'],
   [adminDriveRoutes, 'drive'],
+  [teamRoutes, 'team'],
+  [adminTeamRoutes, 'team'],
 ]);
 
 declare module 'fastify' {
@@ -137,6 +143,8 @@ export async function buildApp(ctx: AppContext, forge: ForgeProvider | null, opt
       return reply.code(400).send({ error: 'validation_error', message: err.message });
     }
     if (err instanceof DriveError || err instanceof DriveAccessError) return reply.code(err.status).send({ error: err instanceof DriveError ? err.code : err.status === 404 ? 'not_found' : 'forbidden', message: err.message });
+    if (err instanceof TeamError) return reply.code(err.status).send({ error: err.code, message: err.message });
+    if (err instanceof MediaError) return reply.code(400).send({ error: 'media_error', message: err.message });
     if (err instanceof LockedError) return reply.code(423).send({ error: 'locked', message: err.message });
     if (err.name === 'BlobTooLargeError') return reply.code(413).send({ error: 'too_large', message: err.message });
     if (err instanceof FeatureDisabledError) return reply.code(403).send({ error: 'feature_disabled', feature: err.feature, message: err.message });

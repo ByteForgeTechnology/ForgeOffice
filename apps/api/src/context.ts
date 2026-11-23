@@ -5,6 +5,7 @@ import type { EventBus, QueueName, Redis, TypedQueue } from '@forge/events';
 import type { BlobStore } from '@forge/storage';
 import type { MailContext } from '@forge/mail';
 import type { DriveContext } from '@forge/drive';
+import type { MediaServer, PresenceStore } from '@forge/team';
 import type { AppConfig } from './config';
 import type { DerivedKeys } from './secrets';
 import type { SigningKeys } from './oidc/keys';
@@ -33,4 +34,18 @@ export interface AppContext {
   mail: MailContext;
   /** ForgeDrive engine (libraries, files, versions on forge_drive_data). */
   drive: DriveContext;
+  team: TeamServices;
+}
+
+/** Live updates for ForgeTeam: the team service's Socket.IO server plugs in here when it starts. */
+export interface TeamHub {
+  toUsers(userIds: string[], event: string, payload: unknown): void;
+  toRoom(room: string, event: string, payload: unknown): void;
+}
+
+export interface TeamServices {
+  presence: PresenceStore;
+  /** The meeting SFU (mediasoup workers start on first use). */
+  media: MediaServer;
+  hub: TeamHub;
 }

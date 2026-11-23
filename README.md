@@ -5,8 +5,7 @@ Self-hosted, subscription-free productivity suite. Built so far:
 - **Phase 1 – Foundation, Identity & Unified Shell:** monorepo, OIDC identity provider, users/groups/RBAC, audit log, web portal and admin center.
 - **Phase 2 – ForgeMail:** SMTP and IMAP servers written in Node.js, webmail, server-side rules, auto-replies, quarantine, calendars and contacts with CalDAV/CardDAV, meeting rooms and free/busy.
 - **Phase 3 – ForgeDrive & ForgeSites:** file libraries with resumable uploads, de-duplicated storage, versions, a recycle bin, inherited permissions, sharing links, check-out, previews, full-text search, optional virus scanning (ClamAV) and Office editing (Euro-Office); intranet sites with pages, news and widgets.
-
-Team (phase 4) plugs into this foundation.
+- **Phase 4 – ForgeTeam:** teams and channels (public and private), one-to-one and group chats, threads, reactions, mentions, markdown, files kept in Drive, presence synced with calls and the calendar, and audio/video meetings with screen sharing, guests (via a lobby) and recording, on a mediasoup SFU.
 
 ## Quick start (Docker)
 
@@ -29,12 +28,14 @@ ForgeOffice runs as one container per component, all from one image. Browsers, p
 | `admin-web` | 8086 | Web: admin center |
 | `drive-web` | 8087 | Web: ForgeDrive, and the pages behind sharing links |
 | `sites-web` | 8088 | Web: ForgeSites |
+| `team-web` | 8089 | Web: ForgeTeam (chat, channels, meetings) |
 | `directory` | 8091 | ForgeDirectory: sign-in (OpenID Connect), users, groups, roles, organisation, audit, real-time updates; applies database migrations |
 | `mail-api` | 8092 | ForgeMail back end: webmail API, mail admin (transport rules, signatures, smarthost…) |
 | `calendar-api` | 8093 | Calendars, scheduling, CalDAV |
 | `contacts-api` | 8094 | Contacts, CardDAV |
 | `tasks-api` | 8095 | Tasks |
 | `mail-store` | 8096 | Mailbox storage: the only container that mounts `forge_mail_data` |
+| `team-api` | 8098, 40000–40099 UDP/TCP | ForgeTeam back end: messages, presence, meeting signalling (Socket.IO at `/team-socket`) and the mediasoup SFU, which browsers connect to directly on the media ports |
 | `drive-api` | 8097 | ForgeDrive and ForgeSites back end: files, versions, permissions, links, search, WOPI for Office editing |
 | `smtp` | 25, 587, 465 | Receiving mail and submission from mail apps |
 | `imap` | 143, 993 | Mail apps (IMAP) |
@@ -50,6 +51,8 @@ The web, back-end and storage ports are published on `127.0.0.1` only. Set `FORG
 Open `FORGE_PUBLIC_URL`, enter the setup token, and complete the wizard (organisation, domain, branding, policies, first administrator). The token is single-use; it is also stored in the `forge_certs` volume as `setup-token` until setup completes.
 
 **Optional Drive extras.** For virus scanning, set `FORGE_CLAMAV=clamav:3310` in `.env` and start with `docker compose --profile av up -d` (ClamAV needs about 1.5 GB of memory). For Office editing, set `FORGE_OFFICE_URL` to an address browsers can reach (`http://localhost:9980` on one machine) and start with `--profile office`. Also set `FORGE_OFFICE_JWT_SECRET` (`openssl rand -hex 32`), which the document server and drive-api share to sign the editor config and save callbacks. Euro-Office fetches and saves files by calling `drive-api` directly (`FORGE_WOPI_URL`, default `http://drive-api:8097`), and drive-api reaches it at `http://office` (`FORGE_OFFICE_INTERNAL_URL`). It needs 2–4 GB of memory. Collabora Online works too, over WOPI (`FORGE_OFFICE_PROTOCOL=wopi`). Admin → ForgeDrive → Settings shows whether each is working.
+
+**Meetings.** Browsers send audio and video straight to `team-api` on ports 40000–40099 (UDP, with TCP as a fallback), which are published on every interface. Set `FORGE_RTC_ANNOUNCED_IP` in `.env` to the server's address as other computers reach it: its LAN IP on an office network, or its public IP with those ports forwarded. Without it, only browsers on the server itself can join. Admin → ForgeTeam → Meetings & policies shows the setting.
 
 For HTTPS with automatic Let's Encrypt certificates, set `FORGE_DOMAIN` and `FORGE_PUBLIC_URL=https://<domain>` and run `docker compose --profile tls up -d`. Caddy terminates TLS in front of the gateway.
 
@@ -351,6 +354,23 @@ Moving the message between folders keeps the link. Task lists are CalDAV collect
 
 - **Stars.** Star documents, folders and list items to follow them (Drive → Starred lists everything you've starred). When someone else changes something you starred, you get an email. That covers a new version, rename, move, delete or restore, check-in or out, a comment, a new file in a starred folder, or a list item's columns changing (shown as "Status: In progress → Completed"). Changes are batched: the worker's `star-notifications` job runs every 2 minutes and sends one email per person. You only hear about what you can still see, and never about your own changes.
 
+### ForgeTeam
+
+- **Teams are security groups.** Creating a team creates a group (owners and members) and its Drive library. Each channel gets a folder in that library, and a private channel's folder is open only to its members. Admins see teams under ForgeDirectory → Groups as well as ForgeTeam → Teams.
+- **Conversations.**
+  - Standard channels (the whole team), private channels (chosen members), one-to-one chats (one per pair) and group chats.
+  - Messages are markdown, rendered without HTML: code blocks, quotes, lists, links. Mentions are stored as `<@user-id>`.
+  - Threads, edits, deletes (owners can moderate their channels), emoji reactions and full-text search.
+  - Files are uploaded to Drive and attached by id. Chat files go to the sender's "Chat files" folder and are shared with the chat.
+- **Live updates and notifications.** The team service runs its own Socket.IO server (`/team-socket`, with a Redis adapter across replicas). It carries new and changed messages, typing, read state across devices, presence and meeting signalling. Unread and mention counts come from per-person read positions. Each conversation has a notification level: every message (the default for chats), mentions only (the default for channels) or muted. The web app shows desktop notifications to match.
+- **Presence.** Available, Busy, Do not disturb, Away, In a call, In a meeting, Offline. It's worked out from heartbeats from open tabs (Redis keys with a 90-second TTL; idle for 5 minutes means Away), being in a call, busy calendar events (via free/busy), and a status someone sets, optionally until a time and with a message.
+- **Meetings.** "Meet" in any conversation, or the `/team/meet/<code>` link that calendar events already carry.
+  - Each meeting is a mediasoup router: Opus audio and VP8 video, with each participant sending their mic, camera and screen once.
+  - Signalling is a small Socket.IO protocol: transports, produce and consume, pause, raise a hand, reactions.
+  - Organisers can mute or remove people, and admit or deny guests. Guests enter a name and wait in a lobby until someone from the organisation admits them; admins can turn guest access off.
+  - When the last person leaves, the meeting's card in the channel shows its duration and who was there.
+- **Recording.** Organisers can record when it's allowed. The SFU forwards every voice, plus a screen share (or else a camera), as plain RTP to FFmpeg. FFmpeg writes VP8/Opus WebM to `forge_team_media/recordings`, starting a new segment whenever the streams change and joining the segments at the end without re-encoding. The recording is posted in the meeting's conversation and plays from a signed URL.
+
 ### ForgeSites
 
 Sites are intranet pages for a team or the whole organisation. Each site has its own document library, which also controls who can see and edit the site. Pages are edited with a block editor (TipTap) that can embed widgets: the site's latest news, its documents, recent activity, a team calendar and images from the library. News posts can be saved as drafts and then published; the Sites home page combines the news from every site you can see. Sites can also hold **lists** (as in SharePoint): structured data with typed columns (text, multiple lines, number, choice, date, yes/no, person, hyperlink), created blank or from the Tasks, Issue tracker, Contacts or Events templates. Each list has **views**, as in SharePoint: named, saved ways of looking at it that choose the visible columns and their order, sorting (two levels), filters (with `[Me]` and `[Today]`, `[Today]+7`…) and grouping. A view can also be a **board**, with one column per choice of a Choice column, and dragging a card moves the item. Views can use the built-in Created, Modified, Created by and Modified by columns. The first view is the default, and templates come with views such as My tasks, Overdue and Board. Lists can be searched and exported to CSV, and placed on pages as a widget showing any view. Everyone who can see the site can read its lists, and its members can change them. A list holds up to 5,000 items.
@@ -363,7 +383,7 @@ Sites are intranet pages for a team or the whole organisation. Each site has its
 | `forge_redis_data` | redis | AOF persistence, BullMQ state |
 | `forge_mail_data` | `/data/mail` | Message blobs (content-addressed .eml), composer uploads |
 | `forge_drive_data` | `/data/drive` | Drive files (by SHA-256), previews, partial uploads, logos, signature images |
-| `forge_team_media` | `/data/team` | Team media (phase 4) |
+| `forge_team_media` | `/data/team` | Meeting recordings (ForgeTeam) |
 | `forge_certs` | `/data/certs` | OIDC signing keys, master secret, setup token, DKIM keys, TLS certificates |
 | `forge_clamav_db` | clamav | ClamAV signature database (profile `av`) |
 | `forge_office_data` | office | Euro-Office settings and generated secrets (profile `office`) |
@@ -377,12 +397,14 @@ Sites are intranet pages for a team or the whole organisation. Each site has its
 OpenAPI documentation is served at `/api/docs`. Main route groups:
 
 - `/api/v1/setup`, `/api/v1/branding`: first-run setup and public branding
-- `/api/v1/me`: profile, password, TOTP enrolment, recovery codes
+- `/api/v1/me`: profile (including `PUT /api/v1/me/avatar` for a profile picture), password, TOTP enrolment, recovery codes
+- `/api/v1/avatars/<user-id>`: profile pictures. They're served without a session so they work in every app, and they're stored once by hash in `forge_drive_data`. Uploads are cropped to a 512 px WebP square, turned upright and stripped of location data. Admins set them at `/api/v1/admin/users/<id>/avatar`.
 - `/api/v1/directory`: people and group search for all signed-in users (powers global search)
 - `/api/v1/admin/{users,groups,domains,roles,org,audit,system,resources,mail}`: admin center
 - `/api/v1/mail`: folders, conversations, search, send/undo/schedule, drafts, uploads, rules, auto-reply
 - `/api/v1/calendar`, `/api/v1/contacts`, `/api/v1/directory/gal`: calendars, events, RSVP, free/busy, rooms, contacts, Global Address List
 - `/api/v1/drive`: libraries, items, uploads, versions, permissions, links, comments, activity, search; `/api/v1/share/<token>` for sharing links; `/api/v1/drive/office/callback` and `/wopi/files` for the Office editor
+- `/api/v1/team`: teams, channels, chats, messages, files, presence, meetings and recordings; `/api/v1/admin/team` for policies and teams; Socket.IO at `/team-socket`
 - `/api/v1/sites`: sites, pages and news; `/api/v1/admin/drive`: Drive policies and library storage
 - `/dav/`: CalDAV and CardDAV (HTTP Basic with an app password)
 
@@ -398,6 +420,10 @@ Drive:
 
 - A desktop sync client and WebDAV access to libraries.
 - Thumbnails of Office documents and videos (images get thumbnails; PDFs and text files are indexed for search), and OCR of scanned PDFs.
+
+Team:
+
+- Mobile and desktop apps; meeting transcription; breakout rooms; a whiteboard. Meetings run in one `team-api` process (calls aren't spread across replicas).
 
 Platform:
 

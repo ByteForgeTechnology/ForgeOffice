@@ -10,6 +10,7 @@ import { revokeAccount } from '../../oidc/adapter';
 import { authenticate, requirePermission, type Principal } from '../../plugins/auth';
 import { CONTACT_FIELDS, cleanContact, countActiveGlobalAdmins, createUser, effectiveQuota, getPrimaryOrg, serializeUser, userRoleKeys } from '../../services/directory';
 import type { App } from '../../types';
+import { avatarUrl, processAvatar, setAvatar } from '../../services/avatars';
 
 const { and, asc, count, desc, eq, ilike, inArray, ne, or } = orm;
 
@@ -247,6 +248,35 @@ export function adminUserRoutes(app: App, ctx: AppContext) {
       return { items: await listSessions(db, target.id) };
     },
   );
+
+  app.put(
+    '/api/v1/admin/users/:id/avatar',
+    {
+      preHandler: requirePermission(ctx, 'users:manage'),
+      bodyLimit: 22 * 1024 * 1024,
+      schema: { tags: ['admin: users'], summary: 'Set someone’s profile picture', params: IdParams, body: Type.Object({ dataUrl: Type.String({ maxLength: 21 * 1024 * 1024 }) }) },
+    },
+    async (req) => {
+      const p = req.principal!;
+      const target = await loadTarget(p, req.params.id);
+      await assertCanManage(p, target);
+      await setAvatar(ctx, target, await processAvatar(req.body.dataUrl));
+      const [updated] = await db.select().from(users).where(eq(users.id, target.id)).limit(1);
+      await ctx.audit.fromRequest(req, { action: 'user.avatar_updated', targetType: 'user', targetId: target.id, targetLabel: target.email, metadata: { byAdmin: true } });
+      return { avatarUrl: avatarUrl(updated!) };
+    },
+  );
+
+  app.delete('/api/v1/admin/users/:id/avatar', { preHandler: requirePermission(ctx, 'users:manage'), schema: { tags: ['admin: users'], summary: 'Remove someone’s profile picture', params: IdParams } }, async (req) => {
+    const p = req.principal!;
+    const target = await loadTarget(p, req.params.id);
+    await assertCanManage(p, target);
+    if (target.avatarSha) {
+      await setAvatar(ctx, target, null);
+      await ctx.audit.fromRequest(req, { action: 'user.avatar_removed', targetType: 'user', targetId: target.id, targetLabel: target.email, metadata: { byAdmin: true } });
+    }
+    return { avatarUrl: null };
+  });
 
   app.post(
     '/api/v1/admin/users/:id/sessions/revoke',

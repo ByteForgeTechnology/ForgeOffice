@@ -110,7 +110,7 @@ export function UserPicker({ onPick, exclude = [] }: { onPick: (user: DirectoryC
                 }}
                 className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800"
               >
-                <Avatar name={p.displayName} size="sm" />
+                <Avatar name={p.displayName} src={p.avatarUrl} size="sm" />
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium">{p.displayName}</span>
                   <span className="block truncate text-xs text-zinc-500">{p.email}</span>

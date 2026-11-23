@@ -23,6 +23,7 @@ import {
 } from '@forge/ui';
 import { ConfirmDialog, TemporaryPasswordDialog, UserStatusBadge } from '../../components/admin';
 import { DeviceList, type DeviceSession } from '../../components/Devices';
+import { EditableAvatar } from '../../components/ProfilePicture';
 import { api, errorMessage } from '../../lib/api';
 import { useCan, useMe } from '../../lib/hooks';
 import { CONTACT_FIELDS, type ContactKey, type Role, type User } from '../../lib/types';
@@ -93,7 +94,11 @@ export function UserDetailPage() {
         <ArrowLeft className="size-4" /> Users
       </Link>
       <div className="flex flex-wrap items-center gap-4">
-        <Avatar name={user.displayName} size="lg" />
+        {canManage ? (
+          <EditableAvatar name={user.displayName} src={user.avatarUrl} endpoint={`/api/v1/admin/users/${user.id}/avatar`} size="lg" onChanged={() => void qc.invalidateQueries({ queryKey: ['admin'] })} />
+        ) : (
+          <Avatar name={user.displayName} src={user.avatarUrl} size="lg" />
+        )}
         <div className="min-w-0 flex-1">
           <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold tracking-tight">
             {user.displayName} <UserStatusBadge status={user.status} locked={user.locked} />

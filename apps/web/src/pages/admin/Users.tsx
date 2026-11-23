@@ -82,7 +82,7 @@ export function UsersPage() {
                 <tr key={u.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                   <Td>
                     <Link to={`/admin/directory/users/${u.id}`} className="flex items-center gap-3">
-                      <Avatar name={u.displayName} size="sm" />
+                      <Avatar name={u.displayName} src={u.avatarUrl} size="sm" />
                       <span className="min-w-0">
                         <span className="block truncate font-medium text-zinc-900 dark:text-zinc-100">{u.displayName}</span>
                         <span className="block truncate text-xs text-zinc-500">{u.email}</span>

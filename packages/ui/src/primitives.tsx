@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useId, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { forwardRef, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { AlertTriangle, CheckCircle2, Info, Loader2, X, XCircle } from 'lucide-react';
 import { cn, initials } from './utils';
 
@@ -210,19 +210,16 @@ export function StatusDot({ tone, pulse }: { tone: Tone; pulse?: boolean }) {
 
 const AVATAR_COLORS = ['bg-rose-500', 'bg-orange-500', 'bg-amber-500', 'bg-emerald-500', 'bg-teal-500', 'bg-sky-500', 'bg-indigo-500', 'bg-violet-500', 'bg-fuchsia-500'];
 
-export function Avatar({ name, size = 'md', className }: { name: string; size?: 'sm' | 'md' | 'lg'; className?: string }) {
+/** A person's picture, or their initials on a colour from their name (also when the picture can't load). */
+export function Avatar({ name, size = 'md', className, src }: { name: string; size?: 'sm' | 'md' | 'lg' | 'xl'; className?: string; src?: string | null }) {
+  const [failed, setFailed] = useState<string | null>(null);
   let hash = 0;
   for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+  const box = size === 'sm' ? 'size-7 text-xs' : size === 'lg' ? 'size-14 text-lg' : size === 'xl' ? 'size-24 text-3xl' : 'size-9 text-sm';
+  if (src && failed !== src)
+    return <img src={src} alt="" aria-hidden onError={() => setFailed(src)} className={cn('inline-block shrink-0 rounded-full bg-zinc-200 object-cover dark:bg-zinc-700', box, className)} />;
   return (
-    <span
-      aria-hidden
-      className={cn(
-        'inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white',
-        AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length],
-        size === 'sm' ? 'size-7 text-xs' : size === 'lg' ? 'size-14 text-lg' : 'size-9 text-sm',
-        className,
-      )}
-    >
+    <span aria-hidden className={cn('inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white', AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length], box, className)}>
       {initials(name)}
     </span>
   );

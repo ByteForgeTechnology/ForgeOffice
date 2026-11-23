@@ -83,7 +83,8 @@ export function adminDriveRoutes(app: App, ctx: AppContext) {
         siteId: sites.id,
         siteSlug: sites.slug,
         disabledAt: driveLibraries.disabledAt,
-        items: sql<number>`(select count(*)::int from ${driveItems} where ${driveItems.libraryId} = ${driveLibraries.id} and ${driveItems.deletedAt} is null)`,
+        // Columns spelled out with their tables: Drizzle leaves them unqualified inside a sub-query here.
+        items: sql<number>`(select count(*)::int from drive_items di where di.library_id = "drive_libraries"."id" and di.deleted_at is null)`,
         createdAt: driveLibraries.createdAt,
       })
       .from(driveLibraries)

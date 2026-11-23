@@ -29,7 +29,7 @@ export function SearchPage() {
               <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {data.people.map((p) => (
                   <li key={p.id} className="flex items-center gap-3 px-5 py-3">
-                    <Avatar name={p.displayName} />
+                    <Avatar name={p.displayName} src={p.avatarUrl} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">{p.displayName}</p>
                       <p className="truncate text-sm text-zinc-500">{[p.jobTitle, p.department].filter(Boolean).join(' · ') || p.email}</p>

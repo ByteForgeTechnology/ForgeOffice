@@ -1,3 +1,4 @@
+import { avatarUrl } from './avatars';
 import { randomBytes } from 'node:crypto';
 import { BUILTIN_ROLES, GLOBAL_ADMIN, checkPasswordPolicy, hashPassword } from '@forge/auth';
 import {
@@ -195,6 +196,7 @@ export function serializeUser(user: User, extra: { roles?: string[] } = {}) {
     email: user.email,
     domainId: user.domainId,
     displayName: user.displayName,
+    avatarUrl: avatarUrl(user),
     givenName: user.givenName,
     familyName: user.familyName,
     jobTitle: user.jobTitle,
@@ -225,6 +227,7 @@ export function directoryCard(user: User) {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
+    avatarUrl: avatarUrl(user),
     jobTitle: user.jobTitle,
     department: user.department,
     ...contactOf(user),

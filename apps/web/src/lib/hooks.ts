@@ -26,7 +26,7 @@ export function useMe(enabled = true) {
 /** Which optional products are switched on (all on until /me has loaded). */
 export function useFeatures(): FeatureFlags {
   const { data } = useMe();
-  return { mail: true, calendar: true, contacts: true, tasks: true, drive: true, ...data?.org?.features };
+  return { mail: true, calendar: true, contacts: true, tasks: true, drive: true, team: true, ...data?.org?.features };
 }
 
 export function useCan(permission: string): boolean {

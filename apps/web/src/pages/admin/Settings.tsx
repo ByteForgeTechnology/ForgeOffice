@@ -441,7 +441,13 @@ const PRODUCTS: { feature: Feature | null; name: string; icon: LucideIcon; summa
     summary: 'Files and folders, team libraries, sharing and version history, plus ForgeSites (intranet sites, wikis and news).',
     whenOff: ['The Drive and Sites apps are hidden and their files cannot be opened.', 'External sharing links stop working.'],
   },
-  { feature: null, name: 'ForgeTeam', icon: MessagesSquare, summary: 'Chat, channels and meetings.', comingSoon: 'phase 4' },
+  {
+    feature: 'team',
+    name: 'ForgeTeam',
+    icon: MessagesSquare,
+    summary: 'Teams and channels, chat, presence, and audio/video meetings with screen sharing, guests and recording.',
+    whenOff: ['The Team app is hidden and meetings can’t be joined, including links in calendar invitations.', 'Team files stay in Drive; teams stay as security groups.'],
+  },
 ];
 
 /** Organisation → Features: switch optional products on and off. */

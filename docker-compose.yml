@@ -16,6 +16,7 @@ name: forgeoffice
 #   admin-web      8086    admin center
 #   drive-web      8087    ForgeDrive files app and shared-link pages
 #   sites-web      8088    ForgeSites intranet
+#   team-web       8089    ForgeTeam chat, channels and meetings
 #   directory      8091    ForgeDirectory: sign-in (OIDC), users, groups, admin, real-time
 #   mail-api       8092    ForgeMail back end (webmail API, mail admin)
 #   calendar-api   8093    calendars, CalDAV
@@ -23,6 +24,8 @@ name: forgeoffice
 #   tasks-api      8095    tasks
 #   mail-store     8096    mailbox storage (the only container mounting forge_mail_data)
 #   drive-api      8097    ForgeDrive and ForgeSites: files, versions, sharing, WOPI
+#   team-api       8098    ForgeTeam: messages, presence, meeting signalling and the SFU
+#                  40000–40099 UDP/TCP: meeting audio and video (browsers connect here)
 #   smtp           25 / 587 / 465   receive mail, submission
 #   imap           143 / 993        mail apps
 #   worker         –       delivery queue, virus scans, previews, backups, maintenance
@@ -116,6 +119,10 @@ services:
     <<: *web
     environment: { <<: *web-env, FORGE_WEB_APP: sites, PORT: 8088 }
     ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8088:8088"]
+  team-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: team, PORT: 8089 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8089:8089"]
 
   # ------------------------------------------------------ back-end services --
   directory:
@@ -180,6 +187,27 @@ services:
     volumes:
       - forge_certs:/data/certs:ro     # share-link and WOPI token keys
       - forge_drive_data:/data/drive   # files (content-addressed), previews, partial uploads
+
+  team-api:
+    <<: *api
+    environment:
+      <<: *backend-env
+      FORGE_SERVICES: team
+      PORT: 8098
+      # Meeting media: browsers send audio and video straight to these ports,
+      # so they are published on every interface. FORGE_RTC_ANNOUNCED_IP must be
+      # this machine's address as other computers see it (LAN or public IP).
+      FORGE_RTC_ANNOUNCED_IP: ${FORGE_RTC_ANNOUNCED_IP:-}
+      FORGE_RTC_MIN_PORT: 40000
+      FORGE_RTC_MAX_PORT: 40099
+    ports:
+      - "${FORGE_SERVICE_BIND:-127.0.0.1}:8098:8098"
+      - "40000-40099:40000-40099/udp"
+      - "40000-40099:40000-40099/tcp"
+    volumes:
+      - forge_certs:/data/certs:ro     # guest passes and recording links are signed
+      - forge_team_media:/data/team    # meeting recordings
+      - forge_drive_data:/data/drive   # team libraries (deleting a team removes its files)
 
   # ------------------------------------------------------------------ mail --
   # Mailbox storage: raw messages live only here. SMTP, IMAP, the webmail back

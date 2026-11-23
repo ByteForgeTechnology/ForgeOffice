@@ -59,6 +59,11 @@ export interface AppConfig {
     /** Where the editor reaches the drive service's WOPI endpoints (FORGE_WOPI_URL; default the public URL). */
     wopiUrl: string;
   };
+  team: {
+    /** Meeting media (WebRTC) ports: FORGE_RTC_MIN_PORT–FORGE_RTC_MAX_PORT, UDP and TCP. */
+    rtc: { listenIp: string; announcedIp: string | null; minPort: number; maxPort: number; workers: number };
+    ffmpegPath: string;
+  };
   mail: {
     /** The mail-store service (FORGE_MAIL_STORE_URL); unset = local mailbox storage. */
     storeUrl: string | null;
@@ -128,6 +133,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       wopiUrl: (env.FORGE_WOPI_URL ?? publicUrl).replace(/\/+$/, ''),
       officeProtocol: env.FORGE_OFFICE_PROTOCOL === 'wopi' || (!env.FORGE_OFFICE_PROTOCOL && !env.FORGE_OFFICE_URL && !!env.FORGE_COLLABORA_URL) ? 'wopi' : 'docs',
       officeJwtSecret: env.FORGE_OFFICE_JWT_SECRET || null,
+    },
+    team: {
+      rtc: {
+        listenIp: env.FORGE_RTC_LISTEN_IP ?? '0.0.0.0',
+        // Browsers send media here: this machine's LAN or public address (127.0.0.1 only works on this machine).
+        announcedIp: env.FORGE_RTC_ANNOUNCED_IP || null,
+        minPort: Number(env.FORGE_RTC_MIN_PORT ?? 40000),
+        maxPort: Number(env.FORGE_RTC_MAX_PORT ?? 40099),
+        workers: Number(env.FORGE_RTC_WORKERS ?? 1),
+      },
+      ffmpegPath: env.FORGE_FFMPEG ?? 'ffmpeg',
     },
     migrate: env.FORGE_MIGRATE ? env.FORGE_MIGRATE === 'true' : parseServices(env.FORGE_SERVICES).has('directory'),
     mail: {

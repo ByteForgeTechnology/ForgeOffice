@@ -42,7 +42,7 @@
 		reverse_proxy contacts-web:8084
 	}
 
-	@directory_6 path /api/docs /api/v1/admin/apps /api/v1/admin/apps/endpoints /api/v1/admin/audit /api/v1/admin/audit/export.csv /api/v1/admin/domains /api/v1/admin/groups /api/v1/admin/org /api/v1/admin/org/logo /api/v1/admin/roles /api/v1/admin/system/backups /api/v1/admin/system/overview /api/v1/admin/users /api/v1/branding /api/v1/branding/logo /api/v1/directory/search /api/v1/me /api/v1/me/app-passwords /api/v1/me/apps /api/v1/me/mfa /api/v1/me/mfa/recovery-codes /api/v1/me/mfa/totp/disable /api/v1/me/mfa/totp/enable /api/v1/me/mfa/totp/setup /api/v1/me/password /api/v1/me/sessions /api/v1/me/sessions/revoke /api/v1/setup /api/v1/setup/status /healthz /oidc /readyz
+	@directory_6 path /api/docs /api/v1/admin/apps /api/v1/admin/apps/endpoints /api/v1/admin/audit /api/v1/admin/audit/export.csv /api/v1/admin/domains /api/v1/admin/groups /api/v1/admin/org /api/v1/admin/org/logo /api/v1/admin/roles /api/v1/admin/system/backups /api/v1/admin/system/overview /api/v1/admin/users /api/v1/branding /api/v1/branding/logo /api/v1/directory/search /api/v1/me /api/v1/me/app-passwords /api/v1/me/apps /api/v1/me/avatar /api/v1/me/mfa /api/v1/me/mfa/recovery-codes /api/v1/me/mfa/totp/disable /api/v1/me/mfa/totp/enable /api/v1/me/mfa/totp/setup /api/v1/me/password /api/v1/me/sessions /api/v1/me/sessions/revoke /api/v1/setup /api/v1/setup/status /healthz /oidc /readyz
 	handle @directory_6 {
 		reverse_proxy directory:8091
 	}
@@ -82,298 +82,408 @@
 		reverse_proxy tasks-web:8085
 	}
 
-	@mail_14 path /api/v1/admin/shared-mailboxes/*/permissions /api/v1/admin/shared-mailboxes/* /api/v1/admin/mail/quarantine/*/release /api/v1/admin/transport-rules/*/hits /api/v1/admin/mail/quarantine/* /api/v1/admin/transport-rules/*
-	handle @mail_14 {
+	@team_14 path /api/v1/admin/team/meetings /api/v1/admin/team/settings /api/v1/admin/team/teams /api/v1/team/chats /api/v1/team/home /api/v1/team/meetings /api/v1/team/presence /api/v1/team/search /api/v1/team/teams /api/v1/team/teams/discover
+	handle @team_14 {
+		reverse_proxy team-api:8098
+	}
+
+	@team_web_15 path /team
+	handle @team_web_15 {
+		reverse_proxy team-web:8089
+	}
+
+	@mail_16 path /api/v1/admin/shared-mailboxes/*/permissions /api/v1/admin/shared-mailboxes/* /api/v1/admin/mail/quarantine/*/release /api/v1/admin/transport-rules/*/hits /api/v1/admin/mail/quarantine/* /api/v1/admin/transport-rules/*
+	handle @mail_16 {
 		reverse_proxy mail-api:8092
 	}
 
-	@drive_15 path /api/v1/drive/office/callback/*
-	handle @drive_15 {
+	@drive_17 path /api/v1/drive/office/callback/*
+	handle @drive_17 {
 		reverse_proxy drive-api:8097
 	}
 
-	@directory_16 path /api/v1/admin/system/backups/* /api/v1/admin/system/queues/*/retry-failed /api/v1/admin/system/queues/*/remove-job /api/v1/admin/system/queues/*/retry-job /api/v1/admin/system/queues/*/resume /api/v1/admin/system/queues/*/clean /api/v1/admin/system/queues/*/pause /api/v1/admin/system/queues/*/jobs
-	handle @directory_16 {
+	@directory_18 path /api/v1/admin/system/backups/* /api/v1/admin/system/queues/*/retry-failed /api/v1/admin/system/queues/*/remove-job /api/v1/admin/system/queues/*/retry-job /api/v1/admin/system/queues/*/resume /api/v1/admin/system/queues/*/clean /api/v1/admin/system/queues/*/pause /api/v1/admin/system/queues/*/jobs
+	handle @directory_18 {
 		reverse_proxy directory:8091
 	}
 
-	@calendar_17 path /api/v1/calendar/calendars/*/reminders /api/v1/calendar/calendars/*/shares /api/v1/calendar/calendars/*
-	handle @calendar_17 {
+	@calendar_19 path /api/v1/calendar/calendars/*/reminders /api/v1/calendar/calendars/*/shares /api/v1/calendar/calendars/*
+	handle @calendar_19 {
 		reverse_proxy calendar-api:8093
 	}
 
-	@drive_18 path /api/v1/admin/drive/sites/*
-	handle @drive_18 {
+	@drive_20 path /api/v1/admin/drive/sites/*
+	handle @drive_20 {
 		reverse_proxy drive-api:8097
 	}
 
-	@mail_19 path /api/v1/admin/signatures/*
-	handle @mail_19 {
-		reverse_proxy mail-api:8092
-	}
-
-	@directory_20 path /api/v1/me/app-passwords/*
-	handle @directory_20 {
-		reverse_proxy directory:8091
-	}
-
-	@mail_21 path /api/v1/signature-images/*
+	@mail_21 path /api/v1/admin/signatures/*
 	handle @mail_21 {
 		reverse_proxy mail-api:8092
 	}
 
-	@drive_22 path /api/v1/drive/libraries/*/permissions /api/v1/drive/libraries/*/documents /api/v1/drive/libraries/*/activity /api/v1/drive/libraries/*/folders /api/v1/drive/libraries/*/items /api/v1/drive/libraries/*/trash
-	handle @drive_22 {
-		reverse_proxy drive-api:8097
+	@team_22 path /api/v1/admin/team/teams/*
+	handle @team_22 {
+		reverse_proxy team-api:8098
 	}
 
-	@calendar_23 path /api/v1/calendar/events/*/rsvp
-	handle @calendar_23 {
-		reverse_proxy calendar-api:8093
+	@directory_23 path /api/v1/me/app-passwords/*
+	handle @directory_23 {
+		reverse_proxy directory:8091
 	}
 
-	@mail_24 path /api/v1/admin/resources/*
+	@mail_24 path /api/v1/signature-images/*
 	handle @mail_24 {
 		reverse_proxy mail-api:8092
 	}
 
-	@calendar_25 path /api/v1/calendar/events/*
-	handle @calendar_25 {
+	@drive_25 path /api/v1/drive/libraries/*/permissions /api/v1/drive/libraries/*/documents /api/v1/drive/libraries/*/activity /api/v1/drive/libraries/*/folders /api/v1/drive/libraries/*/items /api/v1/drive/libraries/*/trash
+	handle @drive_25 {
+		reverse_proxy drive-api:8097
+	}
+
+	@calendar_26 path /api/v1/calendar/events/*/rsvp
+	handle @calendar_26 {
 		reverse_proxy calendar-api:8093
 	}
 
-	@directory_26 path /api/v1/directory/users/*
-	handle @directory_26 {
-		reverse_proxy directory:8091
+	@team_27 path /api/v1/team/recordings/*/url
+	handle @team_27 {
+		reverse_proxy team-api:8098
 	}
 
-	@contacts_27 path /api/v1/contacts/books/*/shares
-	handle @contacts_27 {
-		reverse_proxy contacts-api:8094
-	}
-
-	@mail_28 path /api/v1/mail/mailboxes/*/shares /api/v1/mail/mailboxes/*/empty
+	@mail_28 path /api/v1/admin/resources/*
 	handle @mail_28 {
 		reverse_proxy mail-api:8092
 	}
 
-	@drive_29 path /api/v1/drive/comments/*
-	handle @drive_29 {
-		reverse_proxy drive-api:8097
+	@calendar_29 path /api/v1/calendar/events/*
+	handle @calendar_29 {
+		reverse_proxy calendar-api:8093
 	}
 
-	@mail_30 path /api/v1/mail/mailboxes/* /api/v1/mail/messages/*/attachments/* /api/v1/admin/domains/*/mail-dns /api/v1/mail/messages/*/location
-	handle @mail_30 {
-		reverse_proxy mail-api:8092
-	}
-
-	@directory_31 path /api/v1/admin/domains/*/primary /api/v1/admin/domains/*/verify
-	handle @directory_31 {
+	@directory_30 path /api/v1/directory/users/*
+	handle @directory_30 {
 		reverse_proxy directory:8091
 	}
 
-	@mail_32 path /api/v1/mail/outbound/*/cancel /api/v1/admin/domains/*/mail /api/v1/mail/messages/*/raw
+	@contacts_31 path /api/v1/contacts/books/*/shares
+	handle @contacts_31 {
+		reverse_proxy contacts-api:8094
+	}
+
+	@mail_32 path /api/v1/mail/mailboxes/*/shares /api/v1/mail/mailboxes/*/empty
 	handle @mail_32 {
 		reverse_proxy mail-api:8092
 	}
 
-	@directory_33 path /api/v1/admin/domains/*
-	handle @directory_33 {
-		reverse_proxy directory:8091
-	}
-
-	@drive_34 path /api/v1/drive/uploads/* /api/v1/sites/by-slug/*
-	handle @drive_34 {
+	@drive_33 path /api/v1/drive/comments/*
+	handle @drive_33 {
 		reverse_proxy drive-api:8097
 	}
 
-	@directory_35 path /api/v1/admin/groups/*/members/* /api/v1/admin/groups/*/members /api/v1/admin/groups/*
-	handle @directory_35 {
-		reverse_proxy directory:8091
+	@mail_34 path /api/v1/mail/mailboxes/*
+	handle @mail_34 {
+		reverse_proxy mail-api:8092
 	}
 
-	@mail_36 path /api/v1/mail/filters/* /api/v1/mail/threads/* /api/v1/admin/users/*/aliases/*/make-primary
+	@team_35 path /api/v1/team/channels/*/messages/*/reactions /api/v1/team/channels/*/messages/*/replies
+	handle @team_35 {
+		reverse_proxy team-api:8098
+	}
+
+	@mail_36 path /api/v1/mail/messages/*/attachments/*
 	handle @mail_36 {
 		reverse_proxy mail-api:8092
 	}
 
-	@drive_37 path /api/v1/drive/items/*/versions/*/restore
-	handle @drive_37 {
-		reverse_proxy drive-api:8097
+	@team_37 path /api/v1/team/channels/*/upload-target /api/v1/team/channels/*/messages/*
+	handle @team_37 {
+		reverse_proxy team-api:8098
 	}
 
-	@directory_38 path /api/v1/admin/users/*/sessions/revoke /api/v1/admin/users/*/reset-password
-	handle @directory_38 {
-		reverse_proxy directory:8091
-	}
-
-	@drive_39 path /api/v1/drive/items/*/permissions /api/v1/drive/items/*/versions/*
-	handle @drive_39 {
-		reverse_proxy drive-api:8097
-	}
-
-	@mail_40 path /api/v1/admin/users/*/aliases/*
-	handle @mail_40 {
+	@mail_38 path /api/v1/admin/domains/*/mail-dns /api/v1/mail/messages/*/location
+	handle @mail_38 {
 		reverse_proxy mail-api:8092
 	}
 
-	@directory_41 path /api/v1/admin/users/*/reset-mfa /api/v1/admin/users/*/unsuspend /api/v1/admin/users/*/sessions
-	handle @directory_41 {
+	@team_39 path /api/v1/team/channels/*/messages
+	handle @team_39 {
+		reverse_proxy team-api:8098
+	}
+
+	@directory_40 path /api/v1/admin/domains/*/primary
+	handle @directory_40 {
 		reverse_proxy directory:8091
 	}
 
-	@drive_42 path /api/v1/drive/items/*/activity /api/v1/drive/items/*/checkout /api/v1/drive/items/*/comments /api/v1/drive/items/*/versions
-	handle @drive_42 {
-		reverse_proxy drive-api:8097
+	@team_41 path /api/v1/team/channels/*/members
+	handle @team_41 {
+		reverse_proxy team-api:8098
 	}
 
-	@mail_43 path /api/v1/admin/users/*/aliases
+	@directory_42 path /api/v1/admin/domains/*/verify
+	handle @directory_42 {
+		reverse_proxy directory:8091
+	}
+
+	@mail_43 path /api/v1/mail/outbound/*/cancel
 	handle @mail_43 {
 		reverse_proxy mail-api:8092
 	}
 
-	@directory_44 path /api/v1/admin/users/*/restore /api/v1/admin/users/*/suspend
-	handle @directory_44 {
-		reverse_proxy directory:8091
+	@team_44 path /api/v1/team/channels/*/notify /api/v1/team/channels/*/files
+	handle @team_44 {
+		reverse_proxy team-api:8098
 	}
 
-	@drive_45 path /api/v1/drive/items/*/checkin /api/v1/drive/items/*/restore
-	handle @drive_45 {
-		reverse_proxy drive-api:8097
+	@mail_45 path /api/v1/admin/domains/*/mail
+	handle @mail_45 {
+		reverse_proxy mail-api:8092
 	}
 
-	@directory_46 path /api/v1/admin/users/*/unlock
-	handle @directory_46 {
-		reverse_proxy directory:8091
+	@team_46 path /api/v1/team/channels/*/read
+	handle @team_46 {
+		reverse_proxy team-api:8098
 	}
 
-	@drive_47 path /api/v1/drive/items/*/office
-	handle @drive_47 {
-		reverse_proxy drive-api:8097
+	@mail_47 path /api/v1/mail/messages/*/raw
+	handle @mail_47 {
+		reverse_proxy mail-api:8092
 	}
 
-	@directory_48 path /api/v1/admin/users/*/roles
+	@directory_48 path /api/v1/admin/domains/*
 	handle @directory_48 {
 		reverse_proxy directory:8091
 	}
 
-	@drive_49 path /api/v1/drive/items/*/links /api/v1/drive/items/*/purge /api/v1/drive/items/*/copy /api/v1/drive/items/*/move /api/v1/drive/items/*/url
+	@drive_49 path /api/v1/drive/uploads/* /api/v1/sites/by-slug/*
 	handle @drive_49 {
 		reverse_proxy drive-api:8097
 	}
 
-	@directory_50 path /api/v1/admin/roles/* /api/v1/admin/users/*
-	handle @directory_50 {
+	@team_50 path /api/v1/team/channels/* /api/v1/team/meetings/*
+	handle @team_50 {
+		reverse_proxy team-api:8098
+	}
+
+	@directory_51 path /api/v1/admin/groups/*/members/* /api/v1/admin/groups/*/members /api/v1/admin/groups/*
+	handle @directory_51 {
 		reverse_proxy directory:8091
 	}
 
-	@drive_51 path /api/v1/drive/items/* /api/v1/drive/links/* /api/v1/drive/thumb/*
-	handle @drive_51 {
-		reverse_proxy drive-api:8097
-	}
-
-	@mail_52 path /api/v1/mail/drafts/*
+	@mail_52 path /api/v1/mail/filters/* /api/v1/mail/threads/* /api/v1/admin/users/*/aliases/*/make-primary
 	handle @mail_52 {
 		reverse_proxy mail-api:8092
 	}
 
-	@directory_53 path /api/v1/me/sessions/*
-	handle @directory_53 {
-		reverse_proxy directory:8091
-	}
-
-	@tasks_54 path /api/v1/tasks/lists/*
-	handle @tasks_54 {
-		reverse_proxy tasks-api:8095
-	}
-
-	@directory_55 path /api/v1/admin/apps/*/revoke /api/v1/admin/apps/*/secret /api/v1/admin/apps/*
-	handle @directory_55 {
-		reverse_proxy directory:8091
-	}
-
-	@drive_56 path /api/v1/drive/raw/*
-	handle @drive_56 {
+	@drive_53 path /api/v1/drive/items/*/versions/*/restore
+	handle @drive_53 {
 		reverse_proxy drive-api:8097
 	}
 
-	@contacts_57 path /dav/addressbooks/* /api/v1/contacts/*
-	handle @contacts_57 {
+	@directory_54 path /api/v1/admin/users/*/sessions/revoke /api/v1/admin/users/*/reset-password
+	handle @directory_54 {
+		reverse_proxy directory:8091
+	}
+
+	@drive_55 path /api/v1/drive/items/*/permissions /api/v1/drive/items/*/versions/*
+	handle @drive_55 {
+		reverse_proxy drive-api:8097
+	}
+
+	@mail_56 path /api/v1/admin/users/*/aliases/*
+	handle @mail_56 {
+		reverse_proxy mail-api:8092
+	}
+
+	@directory_57 path /api/v1/admin/users/*/reset-mfa /api/v1/admin/users/*/unsuspend /api/v1/admin/users/*/sessions
+	handle @directory_57 {
+		reverse_proxy directory:8091
+	}
+
+	@drive_58 path /api/v1/drive/items/*/activity /api/v1/drive/items/*/checkout /api/v1/drive/items/*/comments /api/v1/drive/items/*/versions
+	handle @drive_58 {
+		reverse_proxy drive-api:8097
+	}
+
+	@mail_59 path /api/v1/admin/users/*/aliases
+	handle @mail_59 {
+		reverse_proxy mail-api:8092
+	}
+
+	@directory_60 path /api/v1/admin/users/*/restore /api/v1/admin/users/*/suspend
+	handle @directory_60 {
+		reverse_proxy directory:8091
+	}
+
+	@drive_61 path /api/v1/drive/items/*/checkin /api/v1/drive/items/*/restore
+	handle @drive_61 {
+		reverse_proxy drive-api:8097
+	}
+
+	@directory_62 path /api/v1/admin/users/*/avatar /api/v1/admin/users/*/unlock
+	handle @directory_62 {
+		reverse_proxy directory:8091
+	}
+
+	@drive_63 path /api/v1/drive/items/*/office
+	handle @drive_63 {
+		reverse_proxy drive-api:8097
+	}
+
+	@directory_64 path /api/v1/admin/users/*/roles
+	handle @directory_64 {
+		reverse_proxy directory:8091
+	}
+
+	@drive_65 path /api/v1/drive/items/*/links /api/v1/drive/items/*/purge /api/v1/drive/items/*/copy /api/v1/drive/items/*/move /api/v1/drive/items/*/url
+	handle @drive_65 {
+		reverse_proxy drive-api:8097
+	}
+
+	@directory_66 path /api/v1/admin/roles/* /api/v1/admin/users/*
+	handle @directory_66 {
+		reverse_proxy directory:8091
+	}
+
+	@drive_67 path /api/v1/drive/items/* /api/v1/drive/links/* /api/v1/drive/thumb/*
+	handle @drive_67 {
+		reverse_proxy drive-api:8097
+	}
+
+	@mail_68 path /api/v1/mail/drafts/*
+	handle @mail_68 {
+		reverse_proxy mail-api:8092
+	}
+
+	@directory_69 path /api/v1/me/sessions/*
+	handle @directory_69 {
+		reverse_proxy directory:8091
+	}
+
+	@tasks_70 path /api/v1/tasks/lists/*
+	handle @tasks_70 {
+		reverse_proxy tasks-api:8095
+	}
+
+	@team_71 path /api/v1/team/teams/*/channels /api/v1/team/teams/*/members
+	handle @team_71 {
+		reverse_proxy team-api:8098
+	}
+
+	@directory_72 path /api/v1/admin/apps/*/revoke /api/v1/admin/apps/*/secret
+	handle @directory_72 {
+		reverse_proxy directory:8091
+	}
+
+	@team_73 path /api/v1/team/teams/*/leave /api/v1/team/teams/*/join
+	handle @team_73 {
+		reverse_proxy team-api:8098
+	}
+
+	@directory_74 path /api/v1/admin/apps/*
+	handle @directory_74 {
+		reverse_proxy directory:8091
+	}
+
+	@team_75 path /api/v1/team/guest/* /api/v1/team/media/* /api/v1/team/teams/*
+	handle @team_75 {
+		reverse_proxy team-api:8098
+	}
+
+	@drive_76 path /api/v1/drive/raw/*
+	handle @drive_76 {
+		reverse_proxy drive-api:8097
+	}
+
+	@contacts_77 path /dav/addressbooks/* /api/v1/contacts/*
+	handle @contacts_77 {
 		reverse_proxy contacts-api:8094
 	}
 
-	@directory_58 path /api/v1/me/apps/*
-	handle @directory_58 {
+	@directory_78 path /api/v1/avatars/* /api/v1/me/apps/*
+	handle @directory_78 {
 		reverse_proxy directory:8091
 	}
 
-	@drive_59 path /api/v1/sites/*/lists/*/items/* /api/v1/sites/*/lists/*/items /api/v1/sites/*/lists/*/views /api/v1/share/*/download /api/v1/sites/*/lists/* /api/v1/sites/*/pages/* /api/v1/share/*/unlock /api/v1/share/*/items /api/v1/sites/*/lists /api/v1/sites/*/pages /api/v1/sites/*/news /api/v1/stars/*/* /api/v1/share/* /api/v1/sites/*
-	handle @drive_59 {
+	@drive_79 path /api/v1/sites/*/lists/*/items/* /api/v1/sites/*/lists/*/items /api/v1/sites/*/lists/*/views /api/v1/share/*/download /api/v1/sites/*/lists/* /api/v1/sites/*/pages/* /api/v1/share/*/unlock /api/v1/share/*/items /api/v1/sites/*/lists /api/v1/sites/*/pages /api/v1/sites/*/news /api/v1/stars/*/* /api/v1/share/* /api/v1/sites/*
+	handle @drive_79 {
 		reverse_proxy drive-api:8097
 	}
 
-	@tasks_60 path /api/v1/tasks/*
-	handle @tasks_60 {
+	@tasks_80 path /api/v1/tasks/*
+	handle @tasks_80 {
 		reverse_proxy tasks-api:8095
 	}
 
-	@directory_61 path /interaction/*
-	handle @directory_61 {
+	@directory_81 path /interaction/*
+	handle @directory_81 {
 		reverse_proxy directory:8091
 	}
 
-	@drive_62 path /wopi/files/*/contents /wopi/files/*
-	handle @drive_62 {
+	@team_82 path /team-socket/*
+	handle @team_82 {
+		reverse_proxy team-api:8098
+	}
+
+	@drive_83 path /wopi/files/*/contents /wopi/files/*
+	handle @drive_83 {
 		reverse_proxy drive-api:8097
 	}
 
-	@directory_63 path /socket.io/* /api/docs/*
-	handle @directory_63 {
+	@directory_84 path /socket.io/* /api/docs/*
+	handle @directory_84 {
 		reverse_proxy directory:8091
 	}
 
-	@calendar_web_64 path /calendar/*
-	handle @calendar_web_64 {
+	@calendar_web_85 path /calendar/*
+	handle @calendar_web_85 {
 		reverse_proxy calendar-web:8083
 	}
 
-	@contacts_web_65 path /contacts/*
-	handle @contacts_web_65 {
+	@contacts_web_86 path /contacts/*
+	handle @contacts_web_86 {
 		reverse_proxy contacts-web:8084
 	}
 
-	@admin_web_66 path /admin/*
-	handle @admin_web_66 {
+	@admin_web_87 path /admin/*
+	handle @admin_web_87 {
 		reverse_proxy admin-web:8086
 	}
 
-	@drive_web_67 path /drive/*
-	handle @drive_web_67 {
+	@drive_web_88 path /drive/*
+	handle @drive_web_88 {
 		reverse_proxy drive-web:8087
 	}
 
-	@sites_web_68 path /sites/*
-	handle @sites_web_68 {
+	@sites_web_89 path /sites/*
+	handle @sites_web_89 {
 		reverse_proxy sites-web:8088
 	}
 
-	@tasks_web_69 path /tasks/*
-	handle @tasks_web_69 {
+	@tasks_web_90 path /tasks/*
+	handle @tasks_web_90 {
 		reverse_proxy tasks-web:8085
 	}
 
-	@mail_web_70 path /mail/*
-	handle @mail_web_70 {
+	@mail_web_91 path /mail/*
+	handle @mail_web_91 {
 		reverse_proxy mail-web:8082
 	}
 
-	@directory_71 path /oidc/*
-	handle @directory_71 {
+	@directory_92 path /oidc/*
+	handle @directory_92 {
 		reverse_proxy directory:8091
 	}
 
-	@calendar_72 path /dav/*
-	handle @calendar_72 {
+	@team_web_93 path /team/*
+	handle @team_web_93 {
+		reverse_proxy team-web:8089
+	}
+
+	@calendar_94 path /dav/*
+	handle @calendar_94 {
 		reverse_proxy calendar-api:8093
 	}
 

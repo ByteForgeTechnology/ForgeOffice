@@ -1,6 +1,6 @@
 import { Type } from 'typebox';
 import { BUILTIN_ROLES, GLOBAL_ADMIN, safeEqual } from '@forge/auth';
-import { domains, organizations, orm } from '@forge/db';
+import { domains, organizations, orm, users } from '@forge/db';
 import type { AppContext } from '../context';
 import { HttpError, badRequest, notFound } from '../errors';
 import { discardSetupToken } from '../secrets';
@@ -8,7 +8,7 @@ import { decodeImageDataUrl, retainBlob } from '../services/assets';
 import { createUser, getPrimaryOrg, newVerificationToken, normaliseDomain, seedBuiltinRoles, slugify } from '../services/directory';
 import type { App } from '../types';
 
-const { sql } = orm;
+const { eq, sql } = orm;
 
 export const TIMEZONES = new Set(Intl.supportedValuesOf('timeZone').concat('UTC'));
 export const HEX_COLOR = '^#[0-9a-fA-F]{6}$';
@@ -23,6 +23,21 @@ export function publicRoutes(app: App, ctx: AppContext) {
       logoUrl: org?.logoBlob ? `/api/v1/branding/logo?v=${org.logoBlob.slice(0, 12)}` : null,
       timezone: org?.timezone ?? 'UTC',
     };
+  });
+
+  // Profile pictures: by user id, without a session (so <img> works in every app and in emails).
+  app.get('/api/v1/avatars/:userId', { schema: { tags: ['public'], summary: 'A person’s profile picture (WebP)', params: Type.Object({ userId: Type.String({ format: 'uuid' }) }), querystring: Type.Object({ v: Type.Optional(Type.String({ maxLength: 64 })) }) } }, async (req, reply) => {
+    const [u] = await ctx.db.select({ sha: users.avatarSha, status: users.status }).from(users).where(eq(users.id, req.params.userId)).limit(1);
+    if (!u?.sha || u.status === 'deleted') throw notFound('Picture');
+    const versioned = req.query.v && u.sha.startsWith(req.query.v);
+    reply
+      .header('Content-Type', 'image/webp')
+      // Versioned URLs (?v=) change with the picture, so they can be cached for good.
+      .header('Cache-Control', versioned ? 'public, max-age=31536000, immutable' : 'public, max-age=300')
+      .header('ETag', `"${u.sha.slice(0, 32)}"`)
+      .header('X-Content-Type-Options', 'nosniff');
+    if (req.headers['if-none-match'] === `"${u.sha.slice(0, 32)}"`) return reply.code(304).send();
+    return reply.send(ctx.assets.createReadStream(u.sha));
   });
 
   app.get('/api/v1/branding/logo', { schema: { tags: ['public'], summary: 'Organisation logo image' } }, async (_req, reply) => {

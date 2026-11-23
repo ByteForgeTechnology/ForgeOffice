@@ -38,7 +38,7 @@ const features = (f: Record<string, boolean>) => call('PATCH', '/api/v1/admin/or
 describe('features (Admin → Organisation → Features)', () => {
   it('are all on by default and shown to everyone', async () => {
     const me = await call('GET', '/api/v1/me', 'helen');
-    expect(me.json.org.features).toEqual({ mail: true, calendar: true, contacts: true, tasks: true, drive: true });
+    expect(me.json.org.features).toEqual({ mail: true, calendar: true, contacts: true, tasks: true, drive: true, team: true });
   });
 
   it('switching a product off makes its API answer 403; data comes back when it is switched on', async () => {
@@ -81,7 +81,7 @@ describe('features (Admin → Organisation → Features)', () => {
     expect((await call('PATCH', '/api/v1/admin/org', 'helen', { features: { mail: false } })).status).toBe(403);
     // ForgeDirectory has no switch: asking to turn it off changes nothing.
     const dir = await call('PATCH', '/api/v1/admin/org', 'admin', { features: { directory: false } });
-    expect(dir.json.org.features).toEqual({ mail: true, calendar: true, contacts: true, tasks: true, drive: true });
+    expect(dir.json.org.features).toEqual({ mail: true, calendar: true, contacts: true, tasks: true, drive: true, team: true });
     expect((await call('GET', '/api/v1/admin/users', 'admin')).status).toBe(200);
     const audit = await call('GET', '/api/v1/admin/audit?action=org.feature_disabled', 'admin');
     expect(audit.json.items.map((i: { targetLabel: string }) => i.targetLabel).sort()).toEqual(['ForgeCalendar', 'ForgeContacts', 'ForgeMail', 'ForgeTasks']);

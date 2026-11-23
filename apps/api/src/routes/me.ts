@@ -17,6 +17,7 @@ import type { AppContext } from '../context';
 import { HttpError, badRequest, conflict } from '../errors';
 import { authenticate } from '../plugins/auth';
 import { effectiveQuota, getPrimaryOrg, serializeOrg, serializeUser } from '../services/directory';
+import { avatarUrl, processAvatar, setAvatar } from '../services/avatars';
 import type { App } from '../types';
 import { TIMEZONES } from './public';
 
@@ -49,6 +50,28 @@ export function meRoutes(app: App, ctx: AppContext) {
       storage: { usedBytes: p.user.usedBytes, quotaBytes: org ? effectiveQuota(p.user, org) : null },
       mfaRequired: p.user.mfaRequired || !!org?.requireMfa,
     };
+  });
+
+  app.put(
+    '/api/v1/me/avatar',
+    { bodyLimit: 22 * 1024 * 1024, schema: { tags: ['me'], summary: 'Set your profile picture (any common photo format as a data URL; cropped to a square)', body: Type.Object({ dataUrl: Type.String({ maxLength: 21 * 1024 * 1024 }) }) } },
+    async (req) => {
+      const user = req.principal!.user;
+      const image = await processAvatar(req.body.dataUrl);
+      await setAvatar(ctx, user, image);
+      const [updated] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+      await ctx.audit.fromRequest(req, { action: 'user.avatar_updated', targetType: 'user', targetId: user.id, targetLabel: user.email });
+      return { avatarUrl: avatarUrl(updated!) };
+    },
+  );
+
+  app.delete('/api/v1/me/avatar', { schema: { tags: ['me'], summary: 'Remove your profile picture' } }, async (req) => {
+    const user = req.principal!.user;
+    if (user.avatarSha) {
+      await setAvatar(ctx, user, null);
+      await ctx.audit.fromRequest(req, { action: 'user.avatar_removed', targetType: 'user', targetId: user.id, targetLabel: user.email });
+    }
+    return { avatarUrl: null };
   });
 
   app.patch(

@@ -1,7 +1,7 @@
 import type { Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { auditLog, messages, oidcPayloads, orm, organizations, transportRuleHits, userSessions, users, type Database } from '@forge/db';
-import { cleanupUploads, purgeExpired, runStarNotifications, type DriveContext } from '@forge/drive';
+import { cleanupUploads, purgeExpired, release, runStarNotifications, type DriveContext } from '@forge/drive';
 import { expungeMessages, sendSystemNotice, type MailContext } from '@forge/mail';
 import { VOLUME_SCAN_KEY, type JobData, type JobName, type VolumeScan } from '@forge/events';
 import { directorySize } from '@forge/storage';
@@ -18,6 +18,9 @@ export function createMaintenanceProcessor(db: Database, redis: Redis, config: W
         const doomed = await db.select({ id: users.id }).from(users).where(and(eq(users.status, 'deleted'), lt(users.deletedAt, cutoff)));
         // Release stored mail first; deleting the user row alone would orphan the blobs.
         for (const u of doomed) {
+          // Their profile picture's blob, too.
+          const [row] = await db.select({ sha: users.avatarSha }).from(users).where(eq(users.id, u.id)).limit(1);
+          if (row?.sha) await release(drive, row.sha).catch(() => {});
           const ids = await db.select({ id: messages.id }).from(messages).where(eq(messages.userId, u.id));
           for (let i = 0; i < ids.length; i += 500) await expungeMessages(mail, u.id, ids.slice(i, i + 500).map((m) => m.id));
         }

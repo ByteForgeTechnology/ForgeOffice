@@ -17,6 +17,8 @@ import type { AppContext, Queues } from './context';
 import { loadSigningKeys } from './oidc/keys';
 import { createProvider } from './oidc/provider';
 import { attachRealtime } from './plugins/realtime';
+import { attachTeamRealtime } from './plugins/team-realtime';
+import { MediaServer, memoryPresenceStore, redisPresenceStore } from '@forge/team';
 import { deriveKeys, resolveMasterSecret, resolveSetupToken } from './secrets';
 import { AuditService } from './services/audit';
 import { getPrimaryOrg } from './services/directory';
@@ -107,6 +109,12 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
         })().catch((err) => logger.warn({ err }, 'file processing failed'));
       },
     },
+    team: {
+      presence: redis ? redisPresenceStore(redis as never) : memoryPresenceStore(),
+      media: new MediaServer(config.team.rtc, logger),
+      // Replaced by the team Socket.IO server once it is listening.
+      hub: { toUsers: () => {}, toRoom: () => {} },
+    },
   };
 
   await loadSessionPolicy(dbHandle.db);
@@ -114,6 +122,7 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
   const forge = directory ? createProvider(ctx, logger) : null;
   const app = await buildApp(ctx, forge, { logger });
   let realtime: ReturnType<typeof attachRealtime> | null = null;
+  let teamRealtime: ReturnType<typeof attachTeamRealtime> | null = null;
   let protocols: Awaited<ReturnType<typeof startMailProtocols>> | null = null;
   let stopHeartbeat = () => {};
 
@@ -124,6 +133,7 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
     async start() {
       await app.listen({ host: config.host, port: config.port });
       if (directory) realtime = attachRealtime(app.server, ctx, logger);
+      if (config.services.has('team')) teamRealtime = attachTeamRealtime(app.server, ctx, logger);
       if (redis) stopHeartbeat = startHeartbeat(redis, { service: split ? [...config.services].join('+') : 'api', version: config.version });
       if (config.mail.embed) {
         protocols = await startMailProtocols(mail, {
@@ -138,6 +148,8 @@ export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
       stopHeartbeat();
       await protocols?.close().catch(() => {});
       await realtime?.close().catch(() => {});
+      await teamRealtime?.close().catch(() => {});
+      await ctx.team.media.close().catch(() => {});
       await app.close().catch(() => {});
       if (queues) await Promise.all(Object.values(queues).map((q) => q.close())).catch(() => {});
       busSub?.disconnect();

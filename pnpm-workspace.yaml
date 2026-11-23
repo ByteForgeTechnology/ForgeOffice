@@ -4,6 +4,7 @@ packages:
 
 # Native modules / build tools that are allowed to run install scripts.
 allowBuilds:
+  mediasoup: true
   argon2: true
   esbuild: true
   msgpackr-extract: true
