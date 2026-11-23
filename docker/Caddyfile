@@ -1,0 +1,10 @@
+{
+	# Keep Let's Encrypt certificates in the forge_certs volume.
+	storage file_system /data/certs/caddy
+}
+
+{$FORGE_DOMAIN} {
+	encode zstd gzip
+	# The gateway sends each request on to the right ForgeOffice container.
+	reverse_proxy gateway:8080
+}

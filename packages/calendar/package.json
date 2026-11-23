@@ -1,0 +1,21 @@
+{
+  "name": "@forge/calendar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forge/db": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "ical.js": "^2.2.1"
+  },
+  "devDependencies": {
+    "vitest": "^5.1.0"
+  }
+}

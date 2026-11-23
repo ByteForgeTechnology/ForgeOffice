@@ -1,0 +1,44 @@
+{
+  "name": "@forge/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@forge/ui": "workspace:*",
+    "@tanstack/react-query": "^5.107.2",
+    "@tiptap/extension-image": "3.34.0",
+    "@tiptap/extension-link": "^3.34.0",
+    "@tiptap/extension-placeholder": "^3.34.0",
+    "@tiptap/extension-table": "3.34.0",
+    "@tiptap/extension-text-align": "3.34.0",
+    "@tiptap/extension-text-style": "3.34.0",
+    "@tiptap/pm": "^3.34.0",
+    "@tiptap/react": "^3.34.0",
+    "@tiptap/starter-kit": "^3.34.0",
+    "lucide-react": "^1.74.0",
+    "mediasoup-client": "^3.26.0",
+    "oidc-client-ts": "^3.5.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router": "^8.5.1",
+    "socket.io-client": "^4.8.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "node build-apps.mjs",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "build:one": "vite build",
+    "serve": "node serve.mjs",
+    "test": "vitest run"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "name": "@forge/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "build": "tsup",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/helmet": "^13.2.0",
+    "@fastify/middie": "^9.3.6",
+    "@fastify/rate-limit": "^11.2.2",
+    "@fastify/static": "^10.1.11",
+    "@fastify/swagger": "^9.9.5",
+    "@fastify/swagger-ui": "^6.1.4",
+    "@fastify/type-provider-typebox": "^6.3.0",
+    "@forge/auth": "workspace:*",
+    "@forge/calendar": "workspace:*",
+    "@forge/db": "workspace:*",
+    "@forge/drive": "workspace:*",
+    "@forge/events": "workspace:*",
+    "@forge/mail": "workspace:*",
+    "@forge/storage": "workspace:*",
+    "@forge/team": "workspace:*",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "drizzle-orm": "^0.45.4",
+    "fast-xml-parser": "^5.12.1",
+    "fastify": "^5.12.8",
+    "ical.js": "^2.2.1",
+    "jose": "^6.2.17",
+    "oidc-provider": "^9.15.0",
+    "pino": "^10.4.0",
+    "sharp": "^0.35.5",
+    "socket.io": "^4.8.4",
+    "typebox": "^1.4.7"
+  },
+  "devDependencies": {
+    "@types/oidc-provider": "^9.13.1",
+    "imapflow": "^2.12.1",
+    "nodemailer": "^10.6.0",
+    "pino-pretty": "^13.2.0",
+    "smtp-server": "^3.21.6",
+    "socket.io-client": "^4.8.1",
+    "tsdav": "^2.5.1",
+    "tsup": "^9.0.0",
+    "tsx": "^4.23.15",
+    "vitest": "^5.1.0"
+  }
+}

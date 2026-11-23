@@ -1,0 +1,160 @@
+import { EventEmitter } from 'node:events';
+import { loadSessionPolicy, startSessionPolicyRefresh } from './services/sessions';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { FastifyBaseLogger } from 'fastify';
+import { createTokenVerifier } from '@forge/auth';
+import { connectDatabase } from '@forge/db';
+import { EventBus, QUEUE_NAMES, createQueue, createRedis, startHeartbeat } from '@forge/events';
+import { BlobStore } from '@forge/storage';
+import { createMailContext, ensureDkimKey, startMailProtocols } from '@forge/mail';
+import { domains } from '@forge/db';
+import { buildApp } from './app';
+import { processVersion, scanVersion, type DriveContext } from '@forge/drive';
+import { runsAll } from './services';
+import type { AppConfig } from './config';
+import type { AppContext, Queues } from './context';
+import { loadSigningKeys } from './oidc/keys';
+import { createProvider } from './oidc/provider';
+import { attachRealtime } from './plugins/realtime';
+import { attachTeamRealtime } from './plugins/team-realtime';
+import { MediaServer, memoryPresenceStore, redisPresenceStore } from '@forge/team';
+import { deriveKeys, resolveMasterSecret, resolveSetupToken } from './secrets';
+import { AuditService } from './services/audit';
+import { getPrimaryOrg } from './services/directory';
+
+/** Wire up every dependency, build the Fastify app and return start/stop handles. */
+export async function bootstrap(config: AppConfig, logger: FastifyBaseLogger) {
+  const directory = config.services.has('directory');
+  const split = !runsAll(config.services);
+  // In a split install each container mounts only the volumes it needs.
+  for (const v of Object.values(config.volumes)) await mkdir(v.path, { recursive: true, mode: v.key === 'certs' ? 0o700 : 0o750 }).catch((err) => {
+    if (!split) throw err;
+  });
+  logger.info({ services: [...config.services] }, 'starting ForgeOffice services');
+
+  const secret = await resolveMasterSecret(config.volumes.certs.path, config.secret);
+  const keys = deriveKeys(secret);
+  const signing = await loadSigningKeys(config.volumes.certs.path);
+
+  const dbHandle = await connectDatabase(config.databaseUrl);
+  // The directory service owns the schema; the other services start after it (compose health checks).
+  if (config.migrate) {
+    logger.info({ driver: dbHandle.driver }, 'running database migrations');
+    await dbHandle.migrate(config.migrationsDir);
+  }
+
+  const redis = config.redisUrl ? createRedis(config.redisUrl) : null;
+  if (redis) redis.on('error', (err) => logger.warn({ err: err.message }, 'redis connection error'));
+  else logger.warn('REDIS_URL not set: background queues, worker health and multi-replica real-time are disabled');
+  const busSub = redis?.duplicate() ?? null;
+  const bus = redis && busSub ? new EventBus(redis, busSub) : null;
+  const queues = redis ? (Object.fromEntries(QUEUE_NAMES.map((n) => [n, createQueue(n, { url: config.redisUrl! })])) as unknown as Queues) : null;
+
+  const assets = new BlobStore(join(config.volumes.drive.path, 'blobs'));
+  await assets.init();
+
+  const events = new EventEmitter();
+  const org = await getPrimaryOrg(dbHandle.db);
+  const setupToken = org?.setupCompletedAt || !directory ? null : await resolveSetupToken(config.volumes.certs.path, config.setupToken);
+
+  const mail = await createMailContext({
+    db: dbHandle.db,
+    mailDir: config.volumes.mail.path,
+    storeUrl: config.mail.storeUrl,
+    bus,
+    events,
+    deliveryQueue: queues?.['mail-delivery'] ?? null,
+    log: logger,
+    config: {
+      hostname: config.mail.hostname,
+      publicUrl: config.publicUrl,
+      certsDir: config.volumes.certs.path,
+      relayUrl: config.mail.relayUrl,
+      masterSecret: secret,
+      disableAuthChecks: config.mail.disableAuthChecks,
+    },
+  });
+  // Every domain gets a DKIM key so outbound mail is signed from day one.
+  if (config.services.has('mail')) for (const d of await dbHandle.db.select().from(domains)) await ensureDkimKey(mail, d).catch((err) => logger.warn({ err, domain: d.name }, 'could not create DKIM key'));
+
+  const ctx: AppContext = {
+    config,
+    dbHandle,
+    db: dbHandle.db,
+    keys,
+    signing,
+    setupToken,
+    assets,
+    redis,
+    bus,
+    queues,
+    events,
+    audit: new AuditService(dbHandle.db, events, bus, logger),
+    verifyAccessToken: createTokenVerifier({ issuer: config.issuer, audience: config.apiAudience, jwks: signing.publicJwks }),
+    mail,
+    drive: {
+      db: dbHandle.db,
+      blobs: assets,
+      root: config.volumes.drive.path,
+      log: logger,
+      redis: redis as unknown as DriveContext['redis'],
+      clamav: config.drive.clamav,
+      // New file versions: virus scan, then thumbnail and text extraction (worker, or in-process without Redis).
+      onVersionStored: async (job) => {
+        if (queues) return void (await queues['virus-scan'].add('scan', job));
+        void (async () => {
+          const verdict = await scanVersion(ctx.drive, job).catch((err) => (logger.warn({ err }, 'virus scan failed'), 'error'));
+          if (verdict !== 'infected') await processVersion(ctx.drive, job);
+        })().catch((err) => logger.warn({ err }, 'file processing failed'));
+      },
+    },
+    team: {
+      presence: redis ? redisPresenceStore(redis as never) : memoryPresenceStore(),
+      media: new MediaServer(config.team.rtc, logger),
+      // Replaced by the team Socket.IO server once it is listening.
+      hub: { toUsers: () => {}, toRoom: () => {} },
+    },
+  };
+
+  await loadSessionPolicy(dbHandle.db);
+  startSessionPolicyRefresh(dbHandle.db, logger);
+  const forge = directory ? createProvider(ctx, logger) : null;
+  const app = await buildApp(ctx, forge, { logger });
+  let realtime: ReturnType<typeof attachRealtime> | null = null;
+  let teamRealtime: ReturnType<typeof attachTeamRealtime> | null = null;
+  let protocols: Awaited<ReturnType<typeof startMailProtocols>> | null = null;
+  let stopHeartbeat = () => {};
+
+  return {
+    ctx,
+    app,
+    forge,
+    async start() {
+      await app.listen({ host: config.host, port: config.port });
+      if (directory) realtime = attachRealtime(app.server, ctx, logger);
+      if (config.services.has('team')) teamRealtime = attachTeamRealtime(app.server, ctx, logger);
+      if (redis) stopHeartbeat = startHeartbeat(redis, { service: split ? [...config.services].join('+') : 'api', version: config.version });
+      if (config.mail.embed) {
+        protocols = await startMailProtocols(mail, {
+          ports: { ...config.mail.ports, host: config.host },
+          allowInsecureAuth: config.mail.allowInsecureAuth,
+          maxMessageBytes: 35 * 1024 * 1024,
+        });
+        logger.info({ ports: protocols.ports }, 'embedded SMTP/IMAP listeners started');
+      }
+    },
+    async stop() {
+      stopHeartbeat();
+      await protocols?.close().catch(() => {});
+      await realtime?.close().catch(() => {});
+      await teamRealtime?.close().catch(() => {});
+      await ctx.team.media.close().catch(() => {});
+      await app.close().catch(() => {});
+      if (queues) await Promise.all(Object.values(queues).map((q) => q.close())).catch(() => {});
+      busSub?.disconnect();
+      redis?.disconnect();
+      await dbHandle.close().catch(() => {});
+    },
+  };
+}

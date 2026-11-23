@@ -1,0 +1,468 @@
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { KeyRound, LogOut, ShieldCheck, ShieldOff, Trash2 } from 'lucide-react';
+import { Alert, Avatar, Badge, Button, Card, CardBody, CardHeader, Dialog, Field, Input, PageHeader, PageSpinner, Select, ThemeSwitcher, formatDateTime, useToast } from '@forge/ui';
+import { RecoveryCodes } from '../components/AuthCard';
+import { api, errorMessage } from '../lib/api';
+import { useMe } from '../lib/hooks';
+import { useAuth } from '../lib/auth';
+import { DeviceList, type DeviceSession } from '../components/Devices';
+import { EditableAvatar } from '../components/ProfilePicture';
+import type { Enrollment } from '../lib/types';
+import { EnrollForm } from './SignIn';
+
+export function AccountPage() {
+  const { data: me } = useMe();
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (hash) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth' });
+  }, [hash, me]);
+  if (!me) return <PageSpinner />;
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader title="Account settings" description={me.user.email} />
+      <ProfileCard />
+      <PasswordCard />
+      <MfaCard />
+      <DevicesCard />
+      <AppPasswordsCard />
+      <ConnectedAppsCard />
+      <Card>
+        <CardHeader title="Appearance" description="Applies to this browser." />
+        <CardBody>
+          <ThemeSwitcher />
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+function ProfileCard() {
+  const { data: me } = useMe();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const timezones = useQuery({ queryKey: ['setup-status'], queryFn: () => api<{ timezones: string[] }>('/api/v1/setup/status', { anonymous: true }) });
+  const [displayName, setDisplayName] = useState(me!.user.displayName);
+  const [timezone, setTimezone] = useState(me!.user.timezone ?? '');
+  const save = useMutation({
+    mutationFn: () => api('/api/v1/me', { method: 'PATCH', body: { displayName, timezone: timezone || null } }),
+    onSuccess: () => {
+      toast.success('Profile saved');
+      void qc.invalidateQueries({ queryKey: ['me'] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <Card>
+      <CardHeader title="Profile" />
+      <CardBody>
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save.mutate();
+          }}
+        >
+          <div className="flex items-center gap-4">
+            <EditableAvatar name={displayName || me!.user.displayName} src={me!.user.avatarUrl} endpoint="/api/v1/me/avatar" size="lg" onChanged={() => void qc.invalidateQueries({ queryKey: ['me'] })} />
+            <div className="text-sm text-zinc-500">
+              <p>{me!.user.jobTitle ?? 'No job title'}</p>
+              <p>{me!.user.department ?? 'No department'}</p>
+            </div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Display name" htmlFor="display-name">
+              <Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
+            </Field>
+            <Field label="Time zone" htmlFor="tz" hint={`Organisation default: ${me!.org?.timezone ?? 'UTC'}`}>
+              <Select id="tz" value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+                <option value="">Use organisation default</option>
+                {timezones.data?.timezones.map((tz) => (
+                  <option key={tz}>{tz}</option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Button type="submit" variant="primary" loading={save.isPending}>
+            Save profile
+          </Button>
+        </form>
+      </CardBody>
+    </Card>
+  );
+}
+
+function PasswordCard() {
+  const toast = useToast();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const change = useMutation({
+    mutationFn: () => api('/api/v1/me/password', { body: { currentPassword: current, newPassword: next } }),
+    onSuccess: () => {
+      toast.success('Password changed');
+      setCurrent('');
+      setNext('');
+      setConfirm('');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const mismatch = confirm.length > 0 && next !== confirm;
+  return (
+    <Card>
+      <CardHeader title="Password" />
+      <CardBody>
+        <form
+          className="grid gap-4 sm:grid-cols-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!mismatch) change.mutate();
+          }}
+        >
+          <Field label="Current password" htmlFor="cur">
+            <Input id="cur" type="password" autoComplete="current-password" required value={current} onChange={(e) => setCurrent(e.target.value)} />
+          </Field>
+          <Field label="New password" htmlFor="new" hint="12+ characters">
+            <Input id="new" type="password" autoComplete="new-password" required minLength={12} value={next} onChange={(e) => setNext(e.target.value)} />
+          </Field>
+          <Field label="Confirm" htmlFor="conf" error={mismatch ? 'Does not match' : undefined}>
+            <Input id="conf" type="password" autoComplete="new-password" required invalid={mismatch} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </Field>
+          <div className="sm:col-span-3">
+            <Button type="submit" variant="primary" loading={change.isPending} disabled={mismatch}>
+              Change password
+            </Button>
+          </div>
+        </form>
+      </CardBody>
+    </Card>
+  );
+}
+
+interface MfaStatus {
+  totpEnabled: boolean;
+  totpEnabledAt: string | null;
+  required: boolean;
+  recoveryCodesRemaining: number;
+}
+
+function MfaCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const status = useQuery({ queryKey: ['me', 'mfa'], queryFn: () => api<MfaStatus>('/api/v1/me/mfa') });
+  const [enrolling, setEnrolling] = useState<(Enrollment & { enrollmentToken: string }) | null>(null);
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [passwordFor, setPasswordFor] = useState<'disable' | 'regenerate' | null>(null);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const refresh = () => qc.invalidateQueries({ queryKey: ['me'] });
+
+  const start = useMutation({
+    mutationFn: () => api<Enrollment & { enrollmentToken: string }>('/api/v1/me/mfa/totp/setup', { body: {} }),
+    onSuccess: (e) => {
+      setError(null);
+      setEnrolling(e);
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const enable = useMutation({
+    mutationFn: (code: string) => api<{ recoveryCodes: string[] }>('/api/v1/me/mfa/totp/enable', { body: { enrollmentToken: enrolling!.enrollmentToken, code } }),
+    onSuccess: (r) => {
+      setEnrolling(null);
+      setCodes(r.recoveryCodes);
+      void refresh();
+    },
+    onError: (e) => setError(errorMessage(e)),
+  });
+  const withPassword = useMutation({
+    mutationFn: (): Promise<{ ok?: true; recoveryCodes?: string[] }> =>
+      passwordFor === 'disable'
+        ? api<{ ok: true }>('/api/v1/me/mfa/totp/disable', { body: { password } })
+        : api<{ recoveryCodes: string[] }>('/api/v1/me/mfa/recovery-codes', { body: { password } }),
+    onSuccess: (r) => {
+      if (r.recoveryCodes) setCodes(r.recoveryCodes);
+      else toast.success('Authenticator app removed');
+      setPasswordFor(null);
+      setPassword('');
+      void refresh();
+    },
+    onError: (e) => setError(errorMessage(e)),
+  });
+
+  const s = status.data;
+  return (
+    <Card>
+      <div id="security" className="scroll-mt-20" />
+      <CardHeader
+        title="Two-step verification"
+        description="Require a code from an authenticator app in addition to your password."
+        actions={s && <Badge tone={s.totpEnabled ? 'success' : 'warning'}>{s.totpEnabled ? 'On' : 'Off'}</Badge>}
+      />
+      <CardBody className="space-y-4">
+        {!s ? (
+          <PageSpinner />
+        ) : s.totpEnabled ? (
+          <>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Authenticator app added {formatDateTime(s.totpEnabledAt)}. {s.recoveryCodesRemaining} unused recovery codes remain.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => (setError(null), setPasswordFor('regenerate'))}>New recovery codes</Button>
+              <Button
+                variant="ghost"
+                icon={<ShieldOff className="size-4" />}
+                disabled={s.required}
+                title={s.required ? 'Required by your organisation' : undefined}
+                onClick={() => (setError(null), setPasswordFor('disable'))}
+              >
+                Remove authenticator
+              </Button>
+            </div>
+            {s.required && <p className="text-xs text-zinc-500">Your organisation requires two-step verification, so it cannot be turned off.</p>}
+          </>
+        ) : (
+          <>
+            {s.required && <Alert tone="warning">Your organisation requires two-step verification. You will be asked to set it up at your next sign-in.</Alert>}
+            <Button variant="primary" icon={<ShieldCheck className="size-4" />} loading={start.isPending} onClick={() => start.mutate()}>
+              Set up authenticator app
+            </Button>
+          </>
+        )}
+      </CardBody>
+
+      <Dialog open={!!enrolling} onClose={() => setEnrolling(null)} title="Set up authenticator app">
+        {error && (
+          <Alert tone="danger" className="mb-4">
+            {error}
+          </Alert>
+        )}
+        {enrolling && <EnrollForm enrollment={enrolling} busy={enable.isPending} onSubmit={(code) => enable.mutate(code)} />}
+      </Dialog>
+
+      <Dialog
+        open={!!codes}
+        onClose={() => setCodes(null)}
+        title="Your recovery codes"
+        description="Each code works once. Store them somewhere safe; they will not be shown again."
+        footer={
+          <>
+            <Button onClick={() => void navigator.clipboard?.writeText(codes?.join('\n') ?? '')}>Copy</Button>
+            <Button variant="primary" onClick={() => setCodes(null)}>
+              Done
+            </Button>
+          </>
+        }
+      >
+        {codes && <RecoveryCodes codes={codes} />}
+      </Dialog>
+
+      <Dialog
+        open={!!passwordFor}
+        onClose={() => setPasswordFor(null)}
+        size="sm"
+        title={passwordFor === 'disable' ? 'Remove authenticator app' : 'Generate new recovery codes'}
+        description="Confirm with your password."
+        footer={
+          <>
+            <Button onClick={() => setPasswordFor(null)}>Cancel</Button>
+            <Button variant={passwordFor === 'disable' ? 'danger' : 'primary'} loading={withPassword.isPending} onClick={() => withPassword.mutate()} disabled={!password}>
+              {passwordFor === 'disable' ? 'Remove' : 'Generate'}
+            </Button>
+          </>
+        }
+      >
+        {error && (
+          <Alert tone="danger" className="mb-4">
+            {error}
+          </Alert>
+        )}
+        <Field label="Password" htmlFor="confirm-pw">
+          <Input id="confirm-pw" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </Field>
+      </Dialog>
+    </Card>
+  );
+}
+
+/** Where you're signed in: sign out one device, all others, or everywhere. */
+function DevicesCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const { signOut } = useAuth();
+  const sessions = useQuery({ queryKey: ['me', 'sessions'], queryFn: () => api<{ items: DeviceSession[] }>('/api/v1/me/sessions') });
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['me', 'sessions'] });
+  const one = useMutation({
+    mutationFn: (id: string) => api<{ current: boolean }>(`/api/v1/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: (r) => (r.current ? void signOut() : (toast.success('Signed out of that device'), refresh())),
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const many = useMutation({
+    mutationFn: (includeThisDevice: boolean) => api<{ signedOut: number }>('/api/v1/me/sessions/revoke', { body: { includeThisDevice } }),
+    onSuccess: (r, all) => {
+      if (all) return void signOut();
+      toast.success(r.signedOut ? `Signed out of ${r.signedOut} other ${r.signedOut === 1 ? 'device' : 'devices'}` : 'No other devices were signed in');
+      refresh();
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const items = sessions.data?.items ?? [];
+  const others = items.filter((s) => !s.current).length;
+  return (
+    <Card>
+      <div id="devices" className="scroll-mt-20" />
+      <CardHeader title="Where you're signed in" description="Browsers and devices signed in to ForgeOffice, and apps that use “Sign in with ForgeOffice”." />
+      <CardBody className="space-y-4">
+        {sessions.isLoading ? (
+          <PageSpinner />
+        ) : (
+          <DeviceList items={items} busyId={one.isPending ? one.variables : null} onSignOut={(s) => window.confirm(s.current ? 'Sign out of this device?' : `Sign out of ${s.browser} on ${s.os}?`) && one.mutate(s.id)} />
+        )}
+        <div className="flex flex-wrap gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <Button icon={<LogOut className="size-4" />} disabled={!others} loading={many.isPending && many.variables === false} onClick={() => window.confirm('Sign out of every other browser and device?') && many.mutate(false)}>
+            Sign out of all other devices
+          </Button>
+          <Button variant="danger" loading={many.isPending && many.variables === true} onClick={() => window.confirm('Sign out everywhere, including here?') && many.mutate(true)}>
+            Sign out everywhere
+          </Button>
+        </div>
+        <p className="text-xs text-zinc-500">Mail, calendar and contacts apps that use an app password stay connected. Remove their app passwords below to disconnect them.</p>
+      </CardBody>
+    </Card>
+  );
+}
+
+interface ConnectedApp {
+  clientId: string;
+  name: string;
+  description: string;
+  homepageUrl: string | null;
+  enabled: boolean;
+  since: string | null;
+  permissions: { scope: string; label: string }[];
+}
+
+/** Apps outside ForgeOffice that the person has allowed to sign them in. */
+function ConnectedAppsCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const apps = useQuery({ queryKey: ['me', 'apps'], queryFn: () => api<{ items: ConnectedApp[] }>('/api/v1/me/apps') });
+  const remove = useMutation({
+    mutationFn: (clientId: string) => api(`/api/v1/me/apps/${encodeURIComponent(clientId)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Access removed. The app will ask again next time you use it.');
+      void qc.invalidateQueries({ queryKey: ['me', 'apps'] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <Card>
+      <span id="connected-apps" />
+      <CardHeader title="Connected apps" description="Apps you have signed in to with your ForgeOffice account." />
+      <CardBody>
+        {!apps.data?.items.length ? (
+          <p className="text-sm text-zinc-500">No apps yet.</p>
+        ) : (
+          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {apps.data.items.map((a) => (
+              <li key={a.clientId} className="flex items-start gap-3 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                    {a.name} {!a.enabled && <Badge>Turned off by your administrator</Badge>}
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    {[a.homepageUrl && new URL(a.homepageUrl).host, a.since && `Since ${formatDateTime(a.since)}`].filter(Boolean).join(' · ')}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">Can see: {a.permissions.map((p) => p.label.toLowerCase()).join(', ') || 'your account ID'}</p>
+                </div>
+                <Button size="sm" variant="ghost" loading={remove.isPending && remove.variables === a.clientId} onClick={() => window.confirm(`Remove ${a.name}'s access to your account?`) && remove.mutate(a.clientId)}>
+                  Remove access
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function AppPasswordsCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [name, setName] = useState('');
+  const [created, setCreated] = useState<{ name: string; password: string } | null>(null);
+  const list = useQuery({
+    queryKey: ['me', 'app-passwords'],
+    queryFn: () => api<{ items: { id: string; name: string; createdAt: string; lastUsedAt: string | null; lastUsedIp: string | null }[] }>('/api/v1/me/app-passwords'),
+  });
+  const create = useMutation({
+    mutationFn: () => api<{ password: string; appPassword: { name: string } }>('/api/v1/me/app-passwords', { body: { name } }),
+    onSuccess: (r) => {
+      setCreated({ name: r.appPassword.name, password: r.password });
+      setName('');
+      void qc.invalidateQueries({ queryKey: ['me', 'app-passwords'] });
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) => api(`/api/v1/me/app-passwords/${id}`, { method: 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['me', 'app-passwords'] }),
+  });
+  return (
+    <Card>
+      <div id="app-passwords" className="scroll-mt-20" />
+      <CardHeader title="App passwords" description="Sign in mail, calendar and contacts apps (IMAP, SMTP, CalDAV, CardDAV) without your main password. Required when two-step verification is on." />
+      <CardBody className="space-y-4">
+        {list.data?.items.length ? (
+          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {list.data.items.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 py-2 text-sm">
+                <KeyRound className="size-4 text-zinc-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{a.name}</p>
+                  <p className="text-xs text-zinc-500">
+                    Created {formatDateTime(a.createdAt)} · {a.lastUsedAt ? `last used ${formatDateTime(a.lastUsedAt)}${a.lastUsedIp ? ` from ${a.lastUsedIp}` : ''}` : 'never used'}
+                  </p>
+                </div>
+                <Button size="sm" variant="ghost" aria-label={`Revoke ${a.name}`} onClick={() => revoke.mutate(a.id)}>
+                  <Trash2 className="size-4" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-zinc-500">No app passwords yet.</p>
+        )}
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            create.mutate();
+          }}
+        >
+          <Input aria-label="App name" placeholder="e.g. Thunderbird on laptop" value={name} onChange={(e) => setName(e.target.value)} />
+          <Button type="submit" loading={create.isPending} disabled={!name.trim()}>
+            Create
+          </Button>
+        </form>
+      </CardBody>
+      <Dialog
+        open={!!created}
+        onClose={() => setCreated(null)}
+        title={`App password for ${created?.name}`}
+        description="Enter this instead of your normal password. It is shown only once."
+        footer={
+          <>
+            <Button onClick={() => void navigator.clipboard?.writeText(created?.password ?? '')}>Copy</Button>
+            <Button variant="primary" onClick={() => setCreated(null)}>
+              Done
+            </Button>
+          </>
+        }
+      >
+        <code className="block rounded-lg bg-zinc-100 px-3 py-3 text-center font-mono text-xl tracking-widest dark:bg-zinc-800">{created?.password}</code>
+      </Dialog>
+    </Card>
+  );
+}

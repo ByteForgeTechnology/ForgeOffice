@@ -1,0 +1,376 @@
+name: forgeoffice
+
+# ForgeOffice runs as separate containers, one per component, all built from
+# one image. Browsers and apps use the gateway (one address); the gateway
+# sends each request to the container that serves it (docker/gateway/Caddyfile,
+# generated from the code). Every container also has its own published port,
+# bound to ${FORGE_SERVICE_BIND:-127.0.0.1} so only the gateway and the mail
+# protocols are reachable from other machines unless you choose otherwise.
+#
+#   gateway        8080  → one address for everything below
+#   portal-web     8081    home, account, sign-in pages
+#   mail-web       8082    webmail app
+#   calendar-web   8083    calendar app
+#   contacts-web   8084    contacts app
+#   tasks-web      8085    tasks app
+#   admin-web      8086    admin center
+#   drive-web      8087    ForgeDrive files app and shared-link pages
+#   sites-web      8088    ForgeSites intranet
+#   team-web       8089    ForgeTeam chat, channels and meetings
+#   directory      8091    ForgeDirectory: sign-in (OIDC), users, groups, admin, real-time
+#   mail-api       8092    ForgeMail back end (webmail API, mail admin)
+#   calendar-api   8093    calendars, CalDAV
+#   contacts-api   8094    contacts, CardDAV
+#   tasks-api      8095    tasks
+#   mail-store     8096    mailbox storage (the only container mounting forge_mail_data)
+#   drive-api      8097    ForgeDrive and ForgeSites: files, versions, sharing, WOPI
+#   team-api       8098    ForgeTeam: messages, presence, meeting signalling and the SFU
+#                  40000–40099 UDP/TCP: meeting audio and video (browsers connect here)
+#   smtp           25 / 587 / 465   receive mail, submission
+#   imap           143 / 993        mail apps
+#   worker         –       delivery queue, virus scans, previews, backups, maintenance
+#
+# Optional extras (docker compose --profile av --profile office up -d):
+#   clamav         –       virus scanning of uploads   (set FORGE_CLAMAV=clamav:3310 in .env)
+#   office         9980    Euro-Office: editing Office documents (set FORGE_OFFICE_URL in .env)
+
+x-image: &image
+  image: forgeoffice/app:${FORGE_VERSION:-latest}
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  restart: unless-stopped
+
+x-backend: &backend
+  <<: *image
+  env_file: .env
+  environment: &backend-env
+    DATABASE_URL: postgres://${POSTGRES_USER:-forge}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-forge}
+    REDIS_URL: redis://redis:6379
+    FORGE_DATA_ROOT: /data
+    # The Office editor fetches files from, and saves them to, drive-api directly.
+    FORGE_WOPI_URL: ${FORGE_WOPI_URL:-http://drive-api:8097}
+    # drive-api talks to the Office editor inside the Docker network; browsers use FORGE_OFFICE_URL.
+    FORGE_OFFICE_INTERNAL_URL: ${FORGE_OFFICE_INTERNAL_URL:-http://office}
+    FORGE_MAIL_STORE_URL: http://mail-store:8096
+    FORGE_MAIL_EMBED: "false"
+  depends_on: &after-directory
+    directory:
+      condition: service_healthy # it applies database migrations and creates the keys in forge_certs
+
+x-api: &api
+  <<: *backend
+  command: ["node", "apps/api/dist/main.js"]
+
+x-web: &web
+  <<: *image
+  command: ["node", "apps/web/serve.mjs"]
+  environment: &web-env
+    HEALTH_PATH: /healthz
+
+services:
+  # ---------------------------------------------------------------- gateway --
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${FORGE_HTTP_PORT:-8080}:8080"
+    # Reload automatically when docker/gateway/Caddyfile changes (it is
+    # regenerated as routes are added). The folder is mounted rather than the
+    # file, so a replaced file is still seen.
+    command: ["caddy", "run", "--config", "/etc/caddy/gateway/Caddyfile", "--adapter", "caddyfile", "--watch"]
+    volumes:
+      - ./docker/gateway:/etc/caddy/gateway:ro
+    depends_on:
+      - directory
+      - portal-web
+
+  # ------------------------------------------------------------ web apps ----
+  portal-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: portal, PORT: 8081 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8081:8081"]
+  mail-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: mail, PORT: 8082 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8082:8082"]
+  calendar-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: calendar, PORT: 8083 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8083:8083"]
+  contacts-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: contacts, PORT: 8084 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8084:8084"]
+  tasks-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: tasks, PORT: 8085 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8085:8085"]
+  admin-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: admin, PORT: 8086 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8086:8086"]
+  drive-web:
+    <<: *web
+    # Lets the browser embed the Office editor, when it is set up.
+    environment: { <<: *web-env, FORGE_WEB_APP: drive, PORT: 8087, FORGE_FRAME_SOURCES: "${FORGE_OFFICE_URL:-}" }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8087:8087"]
+  sites-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: sites, PORT: 8088 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8088:8088"]
+  team-web:
+    <<: *web
+    environment: { <<: *web-env, FORGE_WEB_APP: team, PORT: 8089 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8089:8089"]
+
+  # ------------------------------------------------------ back-end services --
+  directory:
+    <<: *api
+    environment:
+      <<: *backend-env
+      FORGE_SERVICES: directory
+      PORT: 8091
+      # The sign-in pages are part of the portal web app.
+      FORGE_WEB_DIR: /app/apps/web/dist/portal
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8091:8091"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - forge_certs:/data/certs        # creates the master secret, signing keys and setup token
+      - forge_drive_data:/data/drive   # organisation logo
+      - forge_backups:/data/backups    # backups listed and started from the admin center
+      # Optional, for live container status in the admin console. Also set
+      # FORGE_DOCKER_SOCKET=/var/run/docker.sock. Prefer a read-only socket proxy.
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  mail-api:
+    <<: *api
+    environment: { <<: *backend-env, FORGE_SERVICES: mail, PORT: 8092 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8092:8092"]
+    depends_on:
+      <<: *after-directory
+      mail-store:
+        condition: service_healthy
+    volumes:
+      - forge_certs:/data/certs        # DKIM keys for new domains
+      - forge_drive_data:/data/drive   # signature images
+
+  calendar-api:
+    <<: *api
+    environment: { <<: *backend-env, FORGE_SERVICES: calendar, PORT: 8093 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8093:8093"]
+    volumes:
+      - forge_certs:/data/certs:ro
+
+  contacts-api:
+    <<: *api
+    environment: { <<: *backend-env, FORGE_SERVICES: contacts, PORT: 8094 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8094:8094"]
+    volumes:
+      - forge_certs:/data/certs:ro
+
+  tasks-api:
+    <<: *api
+    environment: { <<: *backend-env, FORGE_SERVICES: tasks, PORT: 8095 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8095:8095"]
+    volumes:
+      - forge_certs:/data/certs:ro
+
+  drive-api:
+    <<: *api
+    environment: { <<: *backend-env, FORGE_SERVICES: drive, PORT: 8097 }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8097:8097"]
+    volumes:
+      - forge_certs:/data/certs:ro     # share-link and WOPI token keys
+      - forge_drive_data:/data/drive   # files (content-addressed), previews, partial uploads
+
+  team-api:
+    <<: *api
+    environment:
+      <<: *backend-env
+      FORGE_SERVICES: team
+      PORT: 8098
+      # Meeting media: browsers send audio and video straight to these ports,
+      # so they are published on every interface. FORGE_RTC_ANNOUNCED_IP must be
+      # this machine's address as other computers see it (LAN or public IP).
+      FORGE_RTC_ANNOUNCED_IP: ${FORGE_RTC_ANNOUNCED_IP:-}
+      FORGE_RTC_MIN_PORT: 40000
+      FORGE_RTC_MAX_PORT: 40099
+    ports:
+      - "${FORGE_SERVICE_BIND:-127.0.0.1}:8098:8098"
+      - "40000-40099:40000-40099/udp"
+      - "40000-40099:40000-40099/tcp"
+    volumes:
+      - forge_certs:/data/certs:ro     # guest passes and recording links are signed
+      - forge_team_media:/data/team    # meeting recordings
+      - forge_drive_data:/data/drive   # team libraries (deleting a team removes its files)
+
+  # ------------------------------------------------------------------ mail --
+  # Mailbox storage: raw messages live only here. SMTP, IMAP, the webmail back
+  # end and the worker read and write them over HTTP with a service token.
+  mail-store:
+    <<: *image
+    command: ["node", "apps/mailstore/dist/main.js"]
+    env_file: .env # FORGE_SECRET, if set there: the service token is derived from it
+    environment: { FORGE_DATA_ROOT: /data, PORT: 8096, HEALTH_PATH: /healthz }
+    ports: ["${FORGE_SERVICE_BIND:-127.0.0.1}:8096:8096"]
+    depends_on: *after-directory
+    volumes:
+      - forge_mail_data:/data/mail
+      - forge_certs:/data/certs:ro
+
+  smtp:
+    <<: *backend
+    command: ["node", "apps/mailserver/dist/main.js"]
+    environment:
+      <<: *backend-env
+      FORGE_MAIL_ROLE: smtp
+      FORGE_IMAP_PORT: "off"
+      FORGE_IMAPS_PORT: "off"
+    ports:
+      - "${FORGE_SMTP_HOST_PORT:-25}:25"
+      - "587:587"
+      - "465:465"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    healthcheck:
+      disable: true
+    depends_on:
+      <<: *after-directory
+      mail-store:
+        condition: service_healthy
+    volumes:
+      - forge_certs:/data/certs        # TLS certificate (a self-signed one is created if missing)
+
+  imap:
+    <<: *backend
+    command: ["node", "apps/mailserver/dist/main.js"]
+    environment:
+      <<: *backend-env
+      FORGE_MAIL_ROLE: imap
+      FORGE_SMTP_PORT: "off"
+      FORGE_SUBMISSION_PORT: "off"
+      FORGE_SUBMISSIONS_PORT: "off"
+    ports:
+      - "143:143"
+      - "993:993"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    healthcheck:
+      disable: true
+    depends_on:
+      <<: *after-directory
+      mail-store:
+        condition: service_healthy
+      smtp:
+        condition: service_started # smtp creates the TLS certificate first if there is none
+    volumes:
+      - forge_certs:/data/certs:ro
+
+  # ---------------------------------------------------------------- worker --
+  worker:
+    <<: *backend
+    command: ["node", "apps/worker/dist/main.js"]
+    healthcheck:
+      disable: true
+    depends_on:
+      <<: *after-directory
+      mail-store:
+        condition: service_healthy
+    volumes:
+      - forge_mail_data:/data/mail:ro  # read-only: backups and usage scans (messages go through mail-store)
+      - forge_drive_data:/data/drive
+      - forge_team_media:/data/team
+      - forge_certs:/data/certs:ro
+      - forge_backups:/data/backups
+
+  # ------------------------------------------------------ optional extras --
+  # Virus scanning: every upload is streamed to clamd before it can be shared
+  # or previewed. Needs about 1.5 GB of memory for the signature database.
+  clamav:
+    image: clamav/clamav:stable
+    profiles: ["av"]
+    restart: unless-stopped
+    volumes:
+      - forge_clamav_db:/var/lib/clamav
+
+  # Euro-Office Document Server: create and edit Word, Excel and PowerPoint
+  # files in the browser, several people at once. FORGE_OFFICE_URL must be an
+  # address browsers can reach, e.g. http://localhost:9980, or
+  # https://office.example.com behind TLS. Needs about 2–4 GB of memory.
+  # It signs and checks every request with FORGE_OFFICE_JWT_SECRET, which
+  # drive-api shares (from .env).
+  office:
+    image: ${FORGE_OFFICE_IMAGE:-ghcr.io/euro-office/documentserver:latest}
+    profiles: ["office"]
+    restart: unless-stopped
+    ports: ["${FORGE_OFFICE_BIND:-127.0.0.1}:9980:80"]
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${FORGE_OFFICE_JWT_SECRET:-}
+      # drive-api, which it fetches and saves files through, is on the private Docker network.
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+    volumes:
+      - forge_office_data:/var/www/euro-office/Data   # settings and generated secrets
+
+  # ------------------------------------------------------------- data stores --
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-forge}
+    volumes:
+      - forge_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF keeps BullMQ job state across restarts; BullMQ requires noeviction.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - forge_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Optional TLS in front of the gateway with automatic Let's Encrypt certificates:
+  #   docker compose --profile tls up -d
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      FORGE_DOMAIN: ${FORGE_DOMAIN:-localhost}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - forge_certs:/data/certs
+    depends_on:
+      - gateway
+
+volumes:
+  forge_db_data:      # PostgreSQL database files
+  forge_redis_data:   # Redis AOF/RDB persistence & BullMQ job states
+  forge_mail_data:    # Mailbox storage: raw messages (.eml) & attachments — mounted by mail-store
+  forge_drive_data:   # ForgeDrive files (by SHA-256), previews, organisation logo & signature images
+  forge_team_media:   # Chat file drops, voice notes & meeting recordings
+  forge_certs:        # TLS certificates, DKIM keys, OIDC signing keys & master secret
+  forge_backups:      # Automated snapshots (database dump + volume archives)
+  forge_clamav_db:    # Optional: ClamAV virus signature database
+  forge_office_data:  # Optional: Euro-Office keys and settings
+  forge_mdm_data:     # Phase 6 (ForgeManage): installers, .mobileconfig payloads & device logs

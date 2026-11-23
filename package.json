@@ -1,0 +1,22 @@
+{
+  "name": "forgeoffice",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @forge/api --filter @forge/web dev",
+    "build": "pnpm --filter @forge/web build && pnpm --filter @forge/api build && pnpm --filter @forge/worker build && pnpm --filter @forge/mailserver build && pnpm --filter @forge/mailstore build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "db:generate": "pnpm --filter @forge/db generate",
+    "dev:worker": "pnpm --filter @forge/worker dev",
+    "dev:mailserver": "pnpm --filter @forge/mailserver dev"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
