@@ -19,7 +19,8 @@ The easy way
 
    Custom    the parts you choose, to spread ForgeOffice over several servers or run more copies of a
              part. On the first server choose "A new ForgeOffice"; it keeps the database and writes a
-             join code to join-code.txt in its install folder. On each further server, run the same
+             join code to join-code.txt in its install folder. The admin center shows it too, under
+             Organisation > Servers & storage > Add a server. On each further server, run the same
              release's install.sh, choose Custom > Join, paste the join code, and tick the parts it runs:
 
                 Database and Redis     one server only (the first)
@@ -32,7 +33,13 @@ The easy way
                 Background jobs        one or more
 
              The servers reach each other on their private addresses: keep ports 5432, 6379 and
-             8081-8099 open between them and closed to the internet.
+             8081-8099 open between them and closed to the internet. Keep the join code secret: it
+             holds the database password and the master secret.
+
+   Running install.sh again on an installed server offers to upgrade it, show the join code, or (on
+   the gateway's server) change the other servers it uses.
+
+   Plain HTTP is fine for trying ForgeOffice out, but meetings need HTTPS for cameras and microphones.
 
    To upgrade later, run install.sh from the newer release in the same way (on every server, starting
    with the one running the Directory).

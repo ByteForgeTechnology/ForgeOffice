@@ -39,10 +39,33 @@ sudo ./install.sh
 
 The installer installs Docker if needed and asks how ForgeOffice should run:
 
-- **Express:** everything on this server, on your own domain with HTTPS or on a port, with optional virus scanning and Office editing.
-- **Custom:** the parts you tick. The first server of a new ForgeOffice keeps the database and writes a join code (`/opt/forgeoffice/join-code.txt`). Further servers choose **Join** and paste it.
+- **Express:** everything on this server. It asks:
+  - how people reach it: your own domain with HTTPS (a Let's Encrypt certificate, renewed automatically), or a port such as `http://<server IP>:8080`;
+  - the mail server's host name and the mail ports;
+  - the address browsers send meeting audio and video to;
+  - whether to add virus scanning (ClamAV) and Office editing (Euro-Office, which gets its own `docs.` domain over HTTPS).
+- **Custom:** the parts you tick, for spreading ForgeOffice over several servers (see [Several machines](#several-machines)).
+  - **A new ForgeOffice:** this server keeps the database and writes a join code to `/opt/forgeoffice/join-code.txt`.
+  - **Join:** paste the join code, or give the path of a copy of `join-code.txt`. The installer checks it can reach the database and that both servers run the same release.
+  - **The gateway's server** also asks which other servers run the web apps, the Directory and the app back ends, and balances requests between them.
 
-It writes `/opt/forgeoffice/.env`, starts the containers, waits until they answer, and shows the address and setup token. Running a newer release's `install.sh` upgrades an install, keeping its data. `uninstall.sh` removes ForgeOffice, with or without its data. `build/build.sh --platform linux/arm64` builds for ARM servers.
+It generates the passwords, master secret and setup token, writes them to `/opt/forgeoffice/.env` (readable by root only), checks the ports it needs are free, loads the image, and starts the containers. When they answer, it shows the address and setup token. Everything it does is logged to `/var/log/forgeoffice-install.log`.
+
+**Adding a server later.** Admins with the *system:manage* permission can show the join code in the admin center: **Organisation → Servers & storage → Add a server**. Each time it's shown, that's recorded in the audit log. The code holds the database password and the master secret, so keep it secret. Express installs can't be joined, because their database is only reachable inside the one server; the card says so.
+
+**Running `install.sh` again** on an installed server offers to:
+- upgrade to the newer release, keeping the data (on several servers, upgrade every one, starting with the server that runs the Directory);
+- show the join code;
+- change the other servers the gateway uses (when this server runs the gateway).
+
+**Removing.** `uninstall.sh` removes ForgeOffice and keeps its data, or deletes everything after you type `DELETE`. It warns when the server holds the database other servers use, or is a storage node that should be retired first. Docker itself is left alone.
+
+**Building for other servers.** `build/build.sh --platform linux/arm64` builds for ARM servers; the installer refuses a release made for another kind of server. Each run bumps `build/BUILD_NUMBER` (`--same-build` skips that).
+
+> [!NOTE]
+> Installs use the Docker Compose project name `forgeoffice`, the same as this repository's `docker-compose.yml`. On a machine that already runs a development copy, the installer finds its data and offers to delete it. Its default is to stop and change nothing. Try the installer on a separate server or VM.
+
+**Plain HTTP works for trying ForgeOffice out**, including on a LAN address. Browsers withhold some security features from plain-HTTP pages, so the web apps bring their own fallbacks for sign-in. Cameras and microphones are a different matter: browsers only allow them over HTTPS, or on the server itself, so use HTTPS for meetings.
 
 ## Quick start (Docker)
 
@@ -82,7 +105,7 @@ ForgeOffice runs as one container per component, all from one image. Browsers, p
 | `office` *(profile `office`)* | 9980 | Optional Euro-Office Document Server, for editing Office documents in the browser |
 | `db`, `redis` | – | PostgreSQL (shared by the services) and Redis (queues, events, heartbeats) |
 
-The web, back-end and storage ports are published on `127.0.0.1` only. Set `FORGE_SERVICE_BIND=0.0.0.0` to expose them, but browsers should always go through the gateway: it keeps sign-in and the apps on one origin. SMTP and IMAP are published on all interfaces from their own containers. SMTP, IMAP, the webmail back end and the worker store and read messages through `mail-store`, using a service token derived from the master secret. The worker also mounts the mailbox volume read-only, for backups and usage scans.
+The web, back-end and storage ports are published on `127.0.0.1` only. Set `FORGE_SERVICE_BIND=0.0.0.0` to expose them, but browsers should always go through the gateway: it keeps sign-in and the apps on one origin. SMTP and IMAP are published on all interfaces from their own containers. SMTP, IMAP, the webmail back end and the worker store and read messages through the `store` container (still reachable as `mail-store`), using a service token derived from the master secret. The worker also mounts the mailbox volume read-only, for backups and usage scans.
 
 `docker/gateway/Caddyfile` is generated from the routes each service registers, and a test fails if it is out of date. Regenerate it with `UPDATE_GATEWAY=1 pnpm --filter @forge/api test gateway`. The same image still runs everything in one process (`FORGE_SERVICES=all`, the default), which is used in development and tests.
 
@@ -90,9 +113,11 @@ Open `FORGE_PUBLIC_URL`, enter the setup token, and complete the wizard (organis
 
 **Optional Drive extras.** For virus scanning, set `FORGE_CLAMAV=clamav:3310` in `.env` and start with `docker compose --profile av up -d` (ClamAV needs about 1.5 GB of memory). For Office editing, set `FORGE_OFFICE_URL` to an address browsers can reach (`http://localhost:9980` on one machine) and start with `--profile office`. Also set `FORGE_OFFICE_JWT_SECRET` (`openssl rand -hex 32`), which the document server and drive-api share to sign the editor config and save callbacks. Euro-Office fetches and saves files by calling `drive-api` directly (`FORGE_WOPI_URL`, default `http://drive-api:8097`), and drive-api reaches it at `http://office` (`FORGE_OFFICE_INTERNAL_URL`). It needs 2–4 GB of memory. Collabora Online works too, over WOPI (`FORGE_OFFICE_PROTOCOL=wopi`). Admin → ForgeDrive → Settings shows whether each is working.
 
-**Meetings.** Browsers send audio and video straight to `team-api` on ports 40000–40099 (UDP, with TCP as a fallback), which are published on every interface. Set `FORGE_RTC_ANNOUNCED_IP` in `.env` to the server's address as other computers reach it: its LAN IP on an office network, or its public IP with those ports forwarded. Without it, only browsers on the server itself can join. Admin → ForgeTeam → Meetings & policies shows the setting.
+**Meetings.** Browsers send audio and video straight to the `media` container on ports 40000–40099 (UDP, with TCP as a fallback), which are published on every interface. Cameras and microphones need HTTPS, except in a browser on the server itself. Set `FORGE_RTC_ANNOUNCED_IP` in `.env` to the server's address as other computers reach it: its LAN IP on an office network, or its public IP with those ports forwarded. Without it, only browsers on the server itself can join. Admin → ForgeTeam → Meetings & policies shows the setting.
 
-For HTTPS with automatic Let's Encrypt certificates, set `FORGE_DOMAIN` and `FORGE_PUBLIC_URL=https://<domain>` and run `docker compose --profile tls up -d`. Caddy terminates TLS in front of the gateway.
+For HTTPS with automatic Let's Encrypt certificates, set `FORGE_DOMAIN` and `FORGE_PUBLIC_URL=https://<domain>` and run `docker compose --profile tls up -d`. Caddy terminates TLS in front of the gateway. Also set `FORGE_HTTP_BIND=127.0.0.1`, so the gateway's own port is only reachable through Caddy. More HTTPS sites (for example the Office editor on its own domain) go in `docker/sites/*.caddy`.
+
+**Ports.** `FORGE_HTTP_PORT` moves the gateway (default 8080). `FORGE_SMTP_HOST_PORT`, `FORGE_SUBMISSION_HOST_PORT`, `FORGE_SUBMISSIONS_HOST_PORT`, `FORGE_IMAP_HOST_PORT` and `FORGE_IMAPS_HOST_PORT` move the mail ports, for example when another mail server already uses them. Other mail servers only deliver to port 25.
 
 ## Several machines
 
@@ -118,7 +143,9 @@ Two ways to deploy:
 
 **Docker Swarm** (`docker-stack.yml`, the same machines managed as one): label the machines (`forge.db`, `forge.store`, `forge.media`, `forge.mail`), push the image to a registry, then `set -a; . ./.env; set +a; docker stack deploy -c docker-stack.yml forge`. Each service has a `replicas` setting (`FORGE_MAIL_API_REPLICAS`, …), or use `docker service scale forge_mail-api=3`. Storage nodes, media servers and SMTP/IMAP run one per labelled machine.
 
-**Plain Docker** (`deploy/multi-host/`): every machine runs the same compose file with its own `.env`, see `env.example`. `COMPOSE_PROFILES` chooses what each machine runs: `data`, `gateway`, `web`, `directory`, `apps`, `mail`, `store`, `media` or `worker`. For more copies, run a role on more machines and list them in the gateway machine's `FORGE_UPSTREAM_*`.
+**The installer** (Custom) sets up plain Docker on each server for you, as described in [Installing on a server](#installing-on-a-server).
+
+**Plain Docker by hand** (`deploy/multi-host/`): every machine runs the same compose file with its own `.env`, see `env.example`. `COMPOSE_PROFILES` chooses what each machine runs: `data`, `gateway`, `web`, `directory`, `apps`, `mail`, `store`, `media` or `worker`. Add `tls` on the gateway's machine for HTTPS, with `FORGE_DOMAIN` and `FORGE_HTTP_BIND=127.0.0.1`. For more copies, run a role on more machines and list them in the gateway machine's `FORGE_UPSTREAM_*`.
 
 A single machine needs none of this: `docker compose up -d` runs one of everything, with one storage node and one media server.
 
@@ -164,21 +191,25 @@ In development the browser only talks to Vite, which proxies `/api`, `/oidc`, `/
 
 ```
 apps/
-  api/        Fastify back-end services (FORGE_SERVICES=directory|mail|calendar|contacts|tasks|drive|all), oidc-provider, Socket.IO, CalDAV/CardDAV; gateway generator
+  api/        Fastify back-end services (FORGE_SERVICES=directory|mail|calendar|contacts|tasks|drive|team|media|all), oidc-provider, Socket.IO, CalDAV/CardDAV; gateway generator
   worker/     BullMQ worker: outbound mail delivery, virus scans, thumbnails, backups, scheduled maintenance
   mailserver/ SMTP (25/587/465) and IMAP (143/993) listeners (FORGE_MAIL_ROLE=smtp|imap)
   mailstore/  Storage node ("store"): mail, Drive and recordings over authenticated HTTP; any number of nodes
-  web/      React + Vite + Tailwind web apps (portal, mail, calendar, contacts, tasks, drive, sites, admin), built one bundle per app; serve.mjs serves one app per container
+  web/        React + Vite + Tailwind web apps (portal, mail, calendar, contacts, tasks, drive, sites, team, admin), built one bundle per app; serve.mjs serves one app per container
 packages/
   db/       Drizzle schema, migrations, Postgres/PGlite connection
   auth/     RBAC permissions & roles, argon2id, TOTP + recovery codes, JWT verification
-  storage/  Content-addressable SHA-256 blob store on node:fs streams, volume statfs
+  storage/  Content-addressable SHA-256 blob store, storage nodes and the replicated cluster client, volume statfs
   events/   Typed BullMQ queues, Redis pub/sub event bus, service heartbeats
   mail/     Mail engine: MIME parsing, mailbox store, delivery, rules, spam, DKIM, IMAP & SMTP servers
   calendar/ iCalendar/vCard handling, calendar & contact storage, iTIP scheduling, free/busy
   drive/    Drive engine: libraries, items, versions, ACL, uploads, locks, tokens, ClamAV, previews and PDF text
   ui/       Shared React components (buttons, dialogs, tables, app launcher, theming)
-docker/     Dockerfile, gateway/Caddyfile (generated) and the optional TLS Caddyfile
+  team/     ForgeTeam engine: teams, channels, messages, presence, mediasoup SFU, recording, media cluster
+build/      Release builder (build.sh), installer (install.sh), uninstaller (uninstall.sh) and INSTALL.txt
+deploy/     multi-host/: one compose file for plain Docker on several machines, with env.example
+docker/     Dockerfile, gateway/Caddyfile (generated), the optional TLS Caddyfile and its extra sites (sites/*.caddy)
+docker-stack.yml  Docker Swarm deployment
 ```
 
 ## Architecture
@@ -467,6 +498,7 @@ OpenAPI documentation is served at `/api/docs`. Main route groups:
 - `/api/v1/avatars/<user-id>`: profile pictures. They're served without a session so they work in every app, and they're stored once by hash in `forge_drive_data`. Uploads are cropped to a 512 px WebP square, turned upright and stripped of location data. Admins set them at `/api/v1/admin/users/<id>/avatar`.
 - `/api/v1/directory`: people and group search for all signed-in users (powers global search)
 - `/api/v1/admin/{users,groups,domains,roles,org,audit,system,resources,mail}`: admin center
+- `/api/v1/admin/system/cluster`: storage nodes, copies of files, media servers, and whether another server can join. `PUT`/`DELETE /api/v1/admin/system/storage/<id>` retire or forget a node. `POST /api/v1/admin/system/join-code` returns the installer's join code (*system:manage*, audited)
 - `/api/v1/mail`: folders, conversations, search, send/undo/schedule, drafts, uploads, rules, auto-reply
 - `/api/v1/calendar`, `/api/v1/contacts`, `/api/v1/directory/gal`: calendars, events, RSVP, free/busy, rooms, contacts, Global Address List
 - `/api/v1/drive`: libraries, items, uploads, versions, permissions, links, comments, activity, search; `/api/v1/share/<token>` for sharing links; `/api/v1/drive/office/callback` and `/wopi/files` for the Office editor
@@ -489,7 +521,7 @@ Drive:
 
 Team:
 
-- Mobile and desktop apps; meeting transcription; breakout rooms; a whiteboard. Meetings run in one `team-api` process (calls aren't spread across replicas).
+- Mobile and desktop apps; meeting transcription; breakout rooms; a whiteboard. Each meeting runs on one media server (a single very large meeting isn't spread across several).
 
 Platform:
 

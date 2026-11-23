@@ -815,7 +815,7 @@ finished() {
     else
         next="Open this address in a web browser to finish setting up:\n\n      ${url}\n\nThe setup wizard asks for this setup token:  $(env_get FORGE_SETUP_TOKEN)"
         has_role gateway && [ "$WEB_MODE" = http ] && next="${next}\n\nMeetings need HTTPS for cameras and microphones (except on this server itself)."
-        [ "$(env_get FORGE_INSTALL_MODE)" = new ] && next="${next}\n\nTo add servers: copy this release to each, run sudo ./install.sh, choose Custom > Join, and give it the join code in ${INSTALL_DIR}/join-code.txt (keep it secret)."
+        [ "$(env_get FORGE_INSTALL_MODE)" = new ] && next="${next}\n\nTo add servers: copy this release to each, run sudo ./install.sh, choose Custom > Join, and give it the join code in ${INSTALL_DIR}/join-code.txt, also shown in the admin center under Organisation > Servers & storage (keep it secret)."
     fi
     whiptail --backtitle "$BACKTITLE" --title "ForgeOffice is ${1}" --scrolltext --msgbox "${next}\n\n${manage}" 24 $W
     clear
