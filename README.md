@@ -30,7 +30,7 @@ Build a release (on a machine with Docker and this source):
 build/build.sh          # → dist/forgeoffice-<version>-build-<n>-<arch>.zip
 ```
 
-The zip holds the image, the compose files, `install.sh`, `uninstall.sh` and `INSTALL.txt`. GitHub Actions ([.github/workflows/build.yml](.github/workflows/build.yml)) builds one on every push to `main`. Download it from the run's **Artifacts**; it's kept for 30 days. The workflow then commits the build number it used back to `main` (`Build <n> [skip ci]`). Copy it to the server, then:
+The zip holds the image, the compose files, `install.sh`, `uninstall.sh` and `INSTALL.txt`. GitHub Actions ([.github/workflows/build.yml](.github/workflows/build.yml)) builds one on every push to `main`. It commits the build number it used back to `main` (`Build <n> [skip ci]`). It then publishes a GitHub release tagged `v<version>-build-<n>`, holding the zip and its SHA-256 checksum, with install instructions and the changes since the last release. Copy it to the server, then:
 
 ```bash
 unzip forgeoffice-*.zip && cd forgeoffice-*/

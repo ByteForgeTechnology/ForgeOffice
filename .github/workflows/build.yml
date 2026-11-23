@@ -1,6 +1,6 @@
 # Builds a ForgeOffice release on every push to main: the Docker image and the installer zip
-# (build/build.sh), kept as a download on the run's page. Then records the build number it used
-# by committing build/BUILD_NUMBER back to main, so the next build gets the next number.
+# (build/build.sh). Records the build number it used by committing build/BUILD_NUMBER back to
+# main, so the next build gets the next number, then publishes a GitHub release with the zip.
 name: Build
 
 on:
@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write # to commit build/BUILD_NUMBER
+  contents: write # to commit build/BUILD_NUMBER and publish the release
 
 jobs:
   build:
@@ -46,19 +46,15 @@ jobs:
         id: release
         run: |
           zip=$(ls dist/forgeoffice-*.zip | head -n 1)
-          echo "zip=$zip" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "$zip" .zip)" >> "$GITHUB_OUTPUT"
-          echo "number=$(cat build/BUILD_NUMBER)" >> "$GITHUB_OUTPUT"
-          echo "### ForgeOffice $(basename "$zip" .zip)" >> "$GITHUB_STEP_SUMMARY"
-          echo "Download the installer zip from **Artifacts** below ($(du -h "$zip" | cut -f1))." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Keep the release
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.release.outputs.name }}
-          path: ${{ steps.release.outputs.zip }}
-          compression-level: 0 # already compressed
-          retention-days: 30
+          version=$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' package.json | head -n 1)
+          number=$(cat build/BUILD_NUMBER)
+          ( cd dist && sha256sum "$(basename "$zip")" > "$(basename "$zip").sha256" )
+          {
+            echo "zip=$zip"
+            echo "number=$number"
+            echo "tag=v${version}-build-${number}"
+            echo "title=ForgeOffice ${version} (build ${number})"
+          } >> "$GITHUB_OUTPUT"
 
       # Only after a successful build. Pushes made with the workflow's own token don't start
       # another run, and [skip ci] makes sure of it.
@@ -80,3 +76,34 @@ jobs:
             sleep 5
           done
           exit 1
+
+      # After the build number is committed, so a failed commit never leaves a release whose
+      # number the next build would take again. The tag marks the commit that was built.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: ${{ steps.release.outputs.zip }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TITLE: ${{ steps.release.outputs.title }}
+        run: |
+          name=$(basename "$ZIP")
+          {
+            echo "## Installing"
+            echo
+            echo "On a 64-bit Linux server (\`$(echo "$name" | sed 's/.*-\([a-z0-9]*\)\.zip$/\1/')\`):"
+            echo
+            echo '```bash'
+            echo "unzip ${name} && cd ${name%.zip}"
+            echo "sudo ./install.sh"
+            echo '```'
+            echo
+            echo "Run the same on an installed server to upgrade it (data is kept). Check the download with \`sha256sum -c ${name}.sha256\`. More in INSTALL.txt inside the zip."
+            echo
+          } > release-notes.md
+          gh release create "$TAG" "$ZIP" "$ZIP.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
+            --notes-file release-notes.md \
+            --generate-notes \
+            --latest
+          echo "### [${TITLE}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG})" >> "$GITHUB_STEP_SUMMARY"
